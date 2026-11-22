@@ -76,10 +76,11 @@ const LIFT_W  = [0, 0, 0.12, 0.22, 0.38, 0.58, 0.82, 1]; // swing lift distribut
 const LEG_LEN_MUL = [1.16, 1.0, 0.94, 1.1];
 const ATTACH_ANG = [0.50, 1.05, 1.75, 2.40];          // coxa socket angles on the carapace rim
 const REST_ANG   = [0.62, 1.28, 1.95, 2.62];          // resting foot angles
-const REST_REACH = [0.80, 0.73, 0.71, 0.79];
+const REST_REACH = [0.72, 0.70, 0.69, 0.76];
 // Coxa, Trochanter, Femur, Patella, Tibia, Tarsus
 const PALP_SEG = [3, 3, 8, 3.5, 5, 5.5];
 const PALP_Z   = [9, 10, 12, 10, 6, 3];
+const PALP_LIFT = [0, 0.05, 0.2, 0.4, 0.65, 0.85, 1];
 const PALP_W   = [2.0, 1.8, 1.9, 1.7, 1.6, 1.9];
 const STAGES = [
   {name:'Instar I · Spiderling', scale:0.48, xp:60},
@@ -457,11 +458,16 @@ function fabrik(J, P, n, bx, by, tx, ty, poles, iters) {
     }
   }
 }
-function makeLimb(segs, mul) {
+function makeLimb(segs, mul, zProf, weights) {
   const n = segs.length + 1, J = [], S = [], R = [];
   for (let k = 0; k < n; k++) { J.push({x: 0, y: 0}); S.push({x: 0, y: 0}); R.push({x: 0, y: 0}); }
-  return {seg: segs.map(l => l * mul), n, J, S, R, Z: new Float32Array(n), P: new Float32Array(n - 1), init: false,
-    poles: [{i: 1, x: 0, y: 0, w: .5}, {i: 2, x: 0, y: 0, w: .18}, {i: 3, x: 0, y: 0, w: .26}, {i: 4, x: 0, y: 0, w: .16}, {i: 5, x: 0, y: 0, w: .1}],
+  // rest horizontal fractions along the chord, from the dorsal elevation profile
+  const z = zProf.concat([0]), frac = new Float32Array(n); let acc = 0;
+  const h = segs.map((l, k) => { const dz = z[k + 1] - z[k]; return Math.sqrt(Math.max(l * l - dz * dz, 0.16 * l * l)); });
+  const ht = h.reduce((a, b) => a + b, 0);
+  for (let k = 1; k < n; k++) { acc += h[k - 1]; frac[k] = acc / ht; }
+  const poles = []; for (let i = 1; i < n - 1; i++) poles.push({i, x: 0, y: 0, w: weights[i - 1]});
+  return {seg: segs.map(l => l * mul), n, J, S, R, Z: new Float32Array(n), P: new Float32Array(n - 1), init: false, poles, frac,
     total: segs.reduce((a, b) => a + b, 0) * mul};
 }
 
@@ -487,12 +493,12 @@ class Spider {
     this.legs = [];
     for (const side of [-1, 1]) for (let i = 0; i < 4; i++) {
       const name = LEG_NAMES[(side < 0 ? 0 : 4) + i];
-      const L = makeLimb(LEG_SEG, LEG_LEN_MUL[i]);
+      const L = makeLimb(LEG_SEG, LEG_LEN_MUL[i], LEG_Z, [.25, .2, .32, .24, .12, .05]);
       Object.assign(L, {name, side, idx: i, phase: PHASE0[name], phase0: PHASE0[name], planted: true,
         foot: {x: 0, y: 0}, sw: {x: 0, y: 0}, tgt: {x: 0, y: 0}, lift: 0, flash: 0});
       this.legs.push(L);
     }
-    this.palps = [-1, 1].map(side => Object.assign(makeLimb(PALP_SEG, 1), {side, tl: {x: 24, y: side * 7}, lift: 1, prevU: 0}));
+    this.palps = [-1, 1].map(side => Object.assign(makeLimb(PALP_SEG, 1, PALP_Z, [.25, .2, .28, .16, .08]), {side, tl: {x: 24, y: side * 7}, lift: 1, prevU: 0}));
     this.colors = null; this.colorFresh = -1;
     this.eyeW = [];
   }
@@ -944,7 +950,10 @@ class Spider {
     const L = this.legs, base = i < 4 ? 0 : 4, idx = i % 4;
     return (idx === 0 || L[base + idx - 1].planted) && (idx === 3 || L[base + idx + 1].planted) && L[(base + 4) % 8 + idx].planted;
   }
-  liftOff(leg) { leg.planted = false; if (leg.phase < STANCE) leg.phase = STANCE; leg.sw.x = leg.foot.x; leg.sw.y = leg.foot.y; }
+  liftOff(leg) {
+    leg.planted = false; if (leg.phase < STANCE) leg.phase = STANCE; leg.sw.x = leg.foot.x; leg.sw.y = leg.foot.y;
+    this.predictFoothold(leg, 2.7, leg.tgt);   // seed the smoothed swing target
+  }
   predictFoothold(leg, rate, out) {
     const tSw = (1 - leg.phase) / Math.max(rate, 0.01);
     let tA = tSw + 0.5 * STANCE / Math.max(this.gaitF, 0.8);
@@ -989,7 +998,9 @@ class Spider {
       }
       if (!leg.planted) {
         const rate = Math.max(dp, minSwing);
-        this.predictFoothold(leg, rate, leg.tgt);
+        // low-pass the predicted foothold so abrupt heading/velocity changes never jerk the swinging foot
+        this.predictFoothold(leg, rate, tmpB); const ka = 1 - Math.exp(-dt * 14);
+        leg.tgt.x += (tmpB.x - leg.tgt.x) * ka; leg.tgt.y += (tmpB.y - leg.tgt.y) * ka;
         if (leg.phase >= 1) {
           leg.phase -= 1; if (leg.phase >= STANCE) leg.phase = 0;
           leg.planted = true; leg.foot.x = leg.tgt.x; leg.foot.y = leg.tgt.y; leg.lift = 0; leg.flash = 1;
@@ -997,7 +1008,7 @@ class Spider {
         } else {
           const t = clamp((leg.phase - STANCE) / (1 - STANCE), 0, 1), q = quintic(t);
           leg.foot.x = leg.sw.x + (leg.tgt.x - leg.sw.x) * q; leg.foot.y = leg.sw.y + (leg.tgt.y - leg.sw.y) * q;
-          leg.lift = Math.sin(PI * t) * liftH;
+          leg.lift = Math.sin(PI * q) * liftH;   // sine arc on eased time: zero vertical velocity at lift-off & touchdown
         }
       }
     }
@@ -1062,68 +1073,45 @@ class Spider {
     }
   }
 
-  // ---------- IK: 14-iteration FABRIK + EMA (in body-local frame)
-  solveLimb(limb, bx, by, tx, ty, a) {
-    const n = limb.n, J = limb.J, S = limb.S, R = limb.R;
-    if (!limb.init) {
-      this.toLocal(bx, by, tmpA); this.toLocal(tx, ty, tmpB);
-      for (let k = 0; k < n; k++) { const t = k / (n - 1); S[k].x = lerp(tmpA.x, tmpB.x, t); S[k].y = lerp(tmpA.y, tmpB.y, t); }
-      limb.init = true; a = 1;
+  // ---------- IK: 14-iteration FABRIK in each limb's vertical plane + EMA
+  // A spider limb moves essentially in the vertical plane through its coxa socket and claw,
+  // so the chain is solved in (u = distance along the ground chord, v = height) space.
+  // The zHeights profile is the pole template (the Femur-Patella knee arch), so the knee can
+  // only ever bend upward: no top-down knee flipping. A small fixed bow is added in plan view.
+  solvePlanar(limb, bx, by, zBase, tx, ty, zTip, zProf, liftW, lift, bow, hMul, a) {
+    const s = this.scale, n = limb.n, J = limb.J, S = limb.S, R = limb.R, P = limb.P, Z = limb.Z;
+    const dx = tx - bx, dy = ty - by, d = Math.max(2, Math.hypot(dx, dy)), ux = dx / d, uy = dy / d;
+    for (let k = 0; k < n - 1; k++) P[k] = limb.seg[k] * s;
+    for (let k = 1; k < n - 1; k++) {
+      const pl = limb.poles[k - 1];
+      pl.x = d * limb.frac[k]; pl.y = zProf[k] * s * hMul + lift * liftW[k];
     }
-    for (let k = 0; k < n; k++) this.toWorld(S[k].x, S[k].y, J[k]);
-    fabrik(J, limb.P, n, bx, by, tx, ty, limb.poles, 14);
-    J[n - 1].x = tx; J[n - 1].y = ty; // claw locked onto ground target
+    if (!limb.init) { for (let k = 0; k < n; k++) { S[k].x = limb.frac[k]; S[k].y = k === 0 ? zBase : k === n - 1 ? zTip : limb.poles[k - 1].y; } limb.init = true; a = 1; }
+    for (let k = 0; k < n; k++) { J[k].x = S[k].x * d; J[k].y = S[k].y; }   // warm start, rescaled to the current chord
+    fabrik(J, P, n, 0, zBase, d, zTip, limb.poles, 14);
+    J[n - 1].x = d; J[n - 1].y = zTip;                                       // claw locked onto its ground target
+    // plan-view bow: perpendicular part of body-forward, unnormalised so it fades smoothly (never flips)
+    const fx = this.cs, fy = this.sn, fd = fx * ux + fy * uy, nx = (fx - fd * ux) * bow, ny = (fy - fd * uy) * bow;
     for (let k = 0; k < n; k++) {
-      this.toLocal(J[k].x, J[k].y, tmpA);
-      if (k === 0 || k === n - 1) { S[k].x = tmpA.x; S[k].y = tmpA.y; }
-      else { S[k].x += (tmpA.x - S[k].x) * a; S[k].y += (tmpA.y - S[k].y) * a; }
-      this.toWorld(S[k].x, S[k].y, R[k]);
+      if (k === 0 || k === n - 1) { S[k].x = J[k].x / d; S[k].y = J[k].y; }
+      else { S[k].x += (J[k].x / d - S[k].x) * a; S[k].y += (J[k].y - S[k].y) * a; }
+      const u = S[k].x * d, c = Math.sin(PI * clamp(S[k].x, 0, 1));
+      R[k].x = bx + ux * u + nx * c; R[k].y = by + uy * u + ny * c; Z[k] = Math.max(0, S[k].y);
     }
+    R[n - 1].x = tx; R[n - 1].y = ty; Z[n - 1] = zTip;
   }
   solveIK(dt) {
-    const s = this.scale, hMul = (1 - 0.45 * this.crouch), a = 1 - Math.exp(-dt * 32);
+    const s = this.scale, hMul = (1 - 0.45 * this.crouch) * lerp(1, 0.85, this.tuck), a = 1 - Math.exp(-dt * 30);
     for (const L of this.legs) {
       const aa = ATTACH_ANG[L.idx];
-      const bx = (1 + Math.cos(aa) * 9) * s, by = L.side * Math.sin(aa) * 8.5 * s;
-      this.toWorld(bx, by, tmpA); const wx = tmpA.x, wy = tmpA.y;
-      // joint heights
-      L.Z[0] = this.zc;
-      for (let k = 1; k < 7; k++) L.Z[k] = LEG_Z[k] * s * hMul * lerp(1, 0.85, this.tuck) + L.lift * LIFT_W[k];
-      L.Z[7] = L.lift;
-      for (let k = 0; k < 7; k++) { const l = L.seg[k] * s, dz = L.Z[k + 1] - L.Z[k]; L.P[k] = Math.sqrt(Math.max(l * l - dz * dz, 0.16 * l * l)); }
-      // anatomical poles: radial coxa, outward/axial knee arch
-      const ra = this.heading + L.side * REST_ANG[L.idx], oxd = Math.cos(ra), oyd = Math.sin(ra);
-      const at = this.heading + L.side * aa;
-      L.poles[0].x = wx + Math.cos(at) * L.P[0]; L.poles[0].y = wy + Math.sin(at) * L.P[0];
-      // Femur-Patella-Tibia arch template: base -> knee K (outward/axial) -> claw
-      let tot = 0; for (let k = 0; k < 7; k++) tot += L.P[k];
-      const cxv = L.foot.x - wx, cyv = L.foot.y - wy, cd = Math.hypot(cxv, cyv) || 1e-6, ux = cxv / cd, uy = cyv / cd;
-      const dp = Math.max(0, oxd * ux + oyd * uy); let nx = oxd - dp * ux, ny = oyd - dp * uy; const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
-      const bulge = Math.sqrt(Math.max(0, tot * tot * 0.25 - cd * cd * 0.25)) * 0.62 + 4 * s;
-      const kx = wx + cxv * 0.42 + nx * bulge, ky = wy + cyv * 0.42 + ny * bulge;
-      const fx = L.foot.x - kx, fy = L.foot.y - ky;
-      L.poles[1].x = (wx + kx) * 0.5; L.poles[1].y = (wy + ky) * 0.5;
-      L.poles[2].x = kx; L.poles[2].y = ky;
-      L.poles[3].x = kx + fx * 0.3; L.poles[3].y = ky + fy * 0.3;
-      L.poles[4].x = kx + fx * 0.68; L.poles[4].y = ky + fy * 0.68;
-      this.solveLimb(L, wx, wy, L.foot.x, L.foot.y, a);
+      this.toWorld((1 + Math.cos(aa) * 9) * s, L.side * Math.sin(aa) * 8.5 * s, tmpA);
+      const bow = (L.idx < 2 ? 1 : -1) * 3.5 * s;   // front pairs bow forward, rear pairs backward
+      this.solvePlanar(L, tmpA.x, tmpA.y, this.zc, L.foot.x, L.foot.y, L.lift, LEG_Z, LIFT_W, L.lift, bow, hMul, a);
     }
     for (const p of this.palps) {
-      const bx = 13 * s, by = p.side * 3.6 * s; this.toWorld(bx, by, tmpA); const wx = tmpA.x, wy = tmpA.y;
-      this.toWorld(p.tl.x * s, p.tl.y * s, tmpB); const tx = tmpB.x, ty = tmpB.y;
-      p.Z[0] = this.zc - 1 * s;
-      for (let k = 1; k < 6; k++) p.Z[k] = PALP_Z[k] * s * hMul + p.lift * (k / 6) * (k / 6) * 1.2;
-      p.Z[6] = p.lift;
-      for (let k = 0; k < 6; k++) { const l = p.seg[k] * s, dz = p.Z[k + 1] - p.Z[k]; p.P[k] = Math.sqrt(Math.max(l * l - dz * dz, 0.16 * l * l)); }
-      const oa = this.heading + p.side * 0.55;
-      p.poles[0].x = wx + Math.cos(oa) * p.P[0]; p.poles[0].y = wy + Math.sin(oa) * p.P[0];
-      const kd = (p.P[0] + p.P[1] + p.P[2]) * 0.9;
-      p.poles[1].x = wx + Math.cos(oa) * kd; p.poles[1].y = wy + Math.sin(oa) * kd;
-      p.poles[2].x = wx + Math.cos(oa) * kd; p.poles[2].y = wy + Math.sin(oa) * kd;
-      p.poles[1].x = wx + Math.cos(oa) * (p.P[0] + p.P[1]); p.poles[1].y = wy + Math.sin(oa) * (p.P[0] + p.P[1]);
-      p.poles[3].x = wx + Math.cos(oa - p.side * 0.3) * (kd + p.P[3]); p.poles[3].y = wy + Math.sin(oa - p.side * 0.3) * (kd + p.P[3]);
-      p.poles[4].x = (p.poles[3].x + tx) / 2; p.poles[4].y = (p.poles[3].y + ty) / 2;
-      this.solveLimb(p, wx, wy, tx, ty, a);
+      this.toWorld(13 * s, p.side * 3.6 * s, tmpA); const wx = tmpA.x, wy = tmpA.y;
+      this.toWorld(p.tl.x * s, p.tl.y * s, tmpB);
+      this.solvePlanar(p, wx, wy, this.zc - s, tmpB.x, tmpB.y, p.lift, PALP_Z, PALP_LIFT, p.lift, 1.5 * s, hMul, a);
     }
   }
 
