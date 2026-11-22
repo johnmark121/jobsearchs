@@ -127,7 +127,7 @@ const SPECIES = {
   mantis: {name: 'Praying Mantis', latin: 'Mantodea · Mantidae', rarity: 'rare', w: 10, kind: 'mantis', pairs: 2, young: 'Nymph',
     seg: [3, 3, 24, 2, 22, 9, 6], z: [8, 10, 22, 20, 10, 3, 0], wid: [2.2, 2.0, 2.2, 1.8, 1.6, 1.2, 1.0], mul: [1.0, 1.25],
     attach: [[7, 3], [2, 3.4]], restA: [1.15, 2.35], reach: [0.72, 0.78], restC: [7, 2],
-    palp: {seg: [3, 4, 15, 2, 12, 6], z: [8, 10, 16, 14, 9, 4], wid: [2.2, 2.2, 3.2, 1.8, 2.0, 1.3], base: [24, 2.2], dx: -7, spread: -2},
+    palp: {seg: [3, 4, 15, 2, 12, 6], z: [8, 10, 16, 14, 9, 4], wid: [2.2, 2.2, 3.2, 1.8, 2.0, 1.3], base: [24, 2.2], dx: -2, spread: -2},
     head: 36, abdX: 4, flex: 0.6, speed: 0.85, lunge: 1.3, palpTop: true, strikePalps: true, shine: [[28.5, 5.5]],
     note: 'Mantodea (mantises): spined raptorial forelegs snap shut on prey in a fraction of a second.',
     morphs: [['green', 60, 95, 0.45, 0.26], ['brown', 30, 32, 0.3, 0.22], ['orchid pink', 10, 330, 0.45, 0.3]]},
@@ -1148,7 +1148,8 @@ class Spider {
           if (d > stop) setGoal(T.x - Math.cos(a) * stop, T.y - Math.sin(a) * stop);
           // run in while still outside the prey's alarm range, then creep the last stretch
           const runK = clamp((d - lr * 1.7) / (lr * 1.5), 0, 1);
-          v = lerp(v * clamp((d - stop) / 40, 0.6, 1), 80, runK);   // steady creep: stays below the prey's startle speed this.crouchT = lerp(STATE_PARAMS.STALK.cr * (1.2 - 0.4 * Brain.traits.bold), 0.15, runK);
+          v = lerp(v * clamp((d - stop) / 40, 0.6, 1), 80, runK);   // steady creep: stays below the prey's startle speed
+          this.crouchT = lerp(STATE_PARAMS.STALK.cr * (1.2 - 0.4 * Brain.traits.bold), 0.15, runK);
           setFace(T.x, T.y); this.faceAlways = true;
         } else if (this.lkp) { const g = this.ghostPos(tmpC); setGoal(g.x, g.y); setFace(g.x, g.y); }
         this.fangT = d < lr * 1.3 ? 0.35 : 0.1;
@@ -2366,6 +2367,17 @@ function segBox(c, ax, ay, bx, by, w) {
   c.moveTo(ax + nx, ay + ny); c.lineTo(bx + nx, by + ny); c.lineTo(bx - nx, by - ny); c.lineTo(ax - nx, ay - ny); c.closePath();
 }
 function neon(c, col, a, w) { c.strokeStyle = rgba(col, a * 0.16); c.lineWidth = w + 2.6; c.stroke(); c.strokeStyle = rgba(col, a); c.lineWidth = w; c.stroke(); }
+const SCHEM = {   // neon-style body boxes per body plan: fore [x,y,w,h] rects, inner rect, eye [x,|y|,r], abdomen segs [rightX, width, height]
+  spider: {fore: [[-12, -10.5, 27, 21], [12, -4.5, 7, 3.6], [12, 0.9, 7, 3.6]], inner: [-6, -6.5, 15, 13], eyes: [[12.6, 2, 1.8], [8.7, 3.3, 1.3], [12, 4.4, .8], [6.2, 5.6, .9]],
+    segs: [[-3, 9, 15], [-12.5, 9.5, 18], [-22.5, 9, 15], [-31, 7, 9]]},
+  jumper: {fore: [[-12, -10.5, 27, 21], [12, -4.5, 7, 3.6], [12, 0.9, 7, 3.6]], inner: [-6, -6.5, 15, 13], eyes: [[13.2, 2.6, 2.8], [12.3, 6, 1.2], [4, 6.4, 1]],
+    segs: [[-3, 9, 14], [-12, 10, 17], [-22, 8, 12]]},
+  beetle: {fore: [[1, -9, 12, 18], [12, -5, 10, 10]], inner: [3, -5, 8, 10], eyes: [[18, 4.3, 1.6]], segs: [[-1, 10, 20], [-11, 10, 20], [-21, 9, 15]]},
+  ant: {fore: [[-2, -3.4, 14, 6.8], [11, -6, 12, 12]], inner: [13, -4, 8, 8], eyes: [[17.5, 4.9, 1.4]], segs: [[-1, 21, 15]]},
+  mantis: {fore: [[1, -3.6, 8, 7.2], [8, -2, 20, 4], [26, -6, 9, 12]], inner: [27, -4, 6, 8], eyes: [[28.5, 5.3, 2]], segs: [[-1, 12, 9], [-13, 12, 10], [-25, 14, 7]]},
+  scorpion: {fore: [[-6, -8.5, 20, 17]], inner: [-2, -5, 12, 10], eyes: [[6, 1.3, 1.2], [13, 4.5, .7]],
+    segs: [[-1, 9, 16], [-10, 9, 15], [-19, 8, 12], [-27, 6, 5], [-33, 6, 4.6], [-39, 6, 4.2], [-45, 6, 3.8]]},
+};
 function drawSchematicSpider(c, th) {
   const S = spider, sc = S.scale, M = th.main, A = th.acc, vis = 1 - 0.6 * S.camo;   // camouflage = fades out
   // limbs as chains of segment boxes
@@ -2386,16 +2398,17 @@ function drawSchematicSpider(c, th) {
   neon(c, A, 0.5 * vis, 0.7);
   // body in local frame: nested boxes
   c.save(); c.translate(S.cx, S.cy - S.zc); c.rotate(S.heading); c.scale(sc, sc);
-  c.beginPath(); c.rect(-12, -10.5, 27, 21); c.rect(12, -4.5, 7, 3.6); c.rect(12, 0.9, 7, 3.6); c.fillStyle = '#000'; c.fill();
-  c.rect(-6, -6.5, 15, 13); neon(c, M, vis, 1.1 / sc);
-  c.fillStyle = rgba(A, 0.14 * vis); c.fillRect(-6, -6.5, 15, 13);
+  const B = SCHEM[SP.kind], inn = B.inner;
+  c.beginPath(); for (const r of B.fore) c.rect(r[0], r[1], r[2], r[3]); c.fillStyle = '#000'; c.fill();
+  c.rect(inn[0], inn[1], inn[2], inn[3]); neon(c, M, vis, 1.1 / sc);
+  c.fillStyle = rgba(A, 0.14 * vis); c.fillRect(inn[0], inn[1], inn[2], inn[3]);
   c.fillStyle = rgba(A, vis); c.beginPath();
-  for (const [ex, ey, er] of [[12.6, 2, 1.8], [12.6, -2, 1.8], [8.7, 3.3, 1.3], [8.7, -3.3, 1.3], [12, 4.4, .8], [12, -4.4, .8], [6.2, 5.6, .9], [6.2, -5.6, .9]]) { c.moveTo(ex + er, ey); c.arc(ex, ey, er, 0, TAU); }
+  for (const [ex, ey, er] of B.eyes) for (const sd of [-1, 1]) { c.moveTo(ex + er, ey * sd); c.arc(ex, ey * sd, er, 0, TAU); }
   c.fill();
-  c.translate(-12.5, 0); c.rotate(angDiff(S.heading, S.abdW));
+  c.translate(SP.abdX, 0); c.rotate(angDiff(S.heading, S.abdW) * SP.flex);
   const bw = (1 + 0.03 * Math.sin(S.bob)) * (0.9 + 0.2 * (1 - S.hunger));
   c.beginPath(); c.rect(-2.5, -2.5, 3, 5);
-  const segs = [[-3, 9, 15], [-12.5, 9.5, 18], [-22.5, 9, 15], [-31, 7, 9]];
+  const segs = B.segs;
   for (const [x, w2, h2] of segs) c.rect(x - w2, -h2 / 2 * bw, w2, h2 * bw);
   c.fillStyle = '#000'; c.fill(); neon(c, M, vis, 1.1 / sc);
   if (S.display > 0.02) {   // passing-cloud bands as sweeping highlighted boxes
@@ -2468,7 +2481,7 @@ function renderSchematic() {
     const S = spider, X = S.cx, Y = S.cy - S.zc, ep = Brain.episode;
     label(c, th, X, Y, 46, -58, `${S.genome.name.toUpperCase()} · ${STAGES[S.stage].name.split(' · ')[0].toUpperCase()}`);
     label(c, th, X, Y, 46, -46, `${S.state}${ep ? ' / ' + TACTICS[ep.tactic].toUpperCase() : ''}`);
-    for (const i of [0, 7]) {
+    for (const i of [0, S.legs.length - 1]) {
       const L = S.legs[i], f = L.R[4], y = f.y - L.Z[4], dx = (L.side < 0 ? -1 : 1) * 30;
       label(c, th, f.x, y, dx, i === 0 ? -22 : 22, `${L.name} φ${L.phase.toFixed(2)} ${L.planted ? 'STANCE' : 'SWING'}`);
     }
