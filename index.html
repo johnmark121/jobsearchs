@@ -19,7 +19,7 @@ canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:
 #st{color:#e6edf3}
 .bar{height:4px;background:#161d25;border-radius:2px;margin-top:2px;overflow:hidden}
 .bar i{display:block;height:100%;width:50%;border-radius:2px;transition:width .2s linear}
-#tb{position:fixed;left:50%;bottom:max(12px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;gap:4px;flex-wrap:wrap;justify-content:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px;z-index:2;max-width:calc(100% - 24px)}
+#tb{position:fixed;left:50%;bottom:max(12px,env(safe-area-inset-bottom));transform:translateX(-50%);width:max-content;display:flex;gap:4px;flex-wrap:wrap;justify-content:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px;z-index:2;max-width:calc(100% - 24px)}
 button{font:inherit;color:var(--txt);background:#121921;border:1px solid var(--line);border-radius:5px;padding:5px 8px;cursor:pointer}
 button:hover{border-color:#34414f}
 button.on{background:#2a2112;border-color:#6d5323;color:#f0c46a}
@@ -36,6 +36,7 @@ button kbd{color:var(--dim);font:inherit;margin-right:4px}
   <div class="hdr"><b>ARACHNIGOTCHI</b><span id="stage"></span><button id="col" title="Collapse">–</button></div>
   <div id="hb">
     <div class="row"><span class="k">state</span><span id="st">—</span></div>
+    <div class="row"><span class="k">mind</span><span id="mind">—</span></div>
     <div class="row"><span class="k">satiety</span><span id="vh"></span></div><div class="bar"><i id="bh" style="background:var(--ok)"></i></div>
     <div class="row"><span class="k">hydration</span><span id="vt"></span></div><div class="bar"><i id="bt" style="background:var(--water)"></i></div>
     <div class="row"><span class="k">energy</span><span id="ve"></span></div><div class="bar"><i id="be" style="background:#9aa7b4"></i></div>
@@ -48,7 +49,7 @@ button kbd{color:var(--dim);font:inherit;margin-right:4px}
 <b>1 Observe</b> – rest the cursor near her to be greeted by her pedipalps; flick it fast and she bolts for cover.<br>
 <b>2 Prey</b> – click to drop a fly. <b>3 Mist</b> – click to spray water droplets.<br>
 <b>4 Pet</b> – press and hold on her body.<br>
-<b>N</b> night · <b>S</b> senses overlay · <b>C</b> CPG network · <b>M</b> sound. Audio unlocks on first click.</div>
+<b>N</b> night · <b>S</b> senses overlay · <b>C</b> CPG network · <b>B</b> brain · <b>M</b> sound. Audio unlocks on first click.</div>
 <div id="tb">
   <button data-tool="observe" class="on"><kbd>1</kbd>Observe</button>
   <button data-tool="prey"><kbd>2</kbd>Prey</button>
@@ -58,6 +59,7 @@ button kbd{color:var(--dim);font:inherit;margin-right:4px}
   <button id="night"><kbd>N</kbd>Night</button>
   <button id="senses" class="on"><kbd>S</kbd>Senses</button>
   <button id="cpg" class="on"><kbd>C</kbd>CPG</button>
+  <button id="brainb" class="on"><kbd>B</kbd>Brain</button>
   <button id="mute"><kbd>M</kbd>Sound on</button>
   <button id="reset">Reset</button>
 </div>
@@ -343,7 +345,7 @@ const panOf = x => clamp((x / W) * 2 - 1, -1, 1) * 0.8;
 
 // ============================================================ world
 const world = {
-  time: 0, flies: [], drops: [], exuviae: [], parts: [], night: false, senses: true, cpg: true, tool: 'observe', spawnT: 4,
+  time: 0, flies: [], drops: [], exuviae: [], parts: [], night: false, senses: true, cpg: true, brain: true, tool: 'observe', spawnT: 4,
   danger: new Float32Array(GW * GH), yield: new Float32Array(GW * GH),
 };
 const input = {x: -9999, y: -9999, vx: 0, vy: 0, speed: 0, inside: false, down: false, still: 0, lastT: 0, lastMove: 0, petting: false};
@@ -355,7 +357,7 @@ class Fly {
     this.z = mode === 'drop' ? 38 : mode === 'fly' ? rnd(22, 38) : 0; this.zt = this.z;
     this.t = mode === 'fly' ? rnd(2, 4.5) : rnd(2.5, 6);
     this.h = rnd(0, TAU); this.vx = 0; this.vy = 0; this.speed = 0; this.wing = rnd(0, TAU);
-    this.react = -1; this.dead = false; this.caught = false; this.sz = rnd(.85, 1.15); this.bt = rnd(0, 9); this.eaten = 0;
+    this.byUser = mode === 'drop'; this.react = -1; this.dead = false; this.caught = false; this.sz = rnd(.85, 1.15); this.bt = rnd(0, 9); this.eaten = 0;
   }
   update(dt) {
     if (this.caught) return;
@@ -483,6 +485,118 @@ function makeLimb(segs, mul, zProf, weights) {
     total: segs.reduce((a, b) => a + b, 0) * mul};
 }
 
+// ============================================================ BRAIN: learned tactics · personality · neural lunge model
+function randn() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(TAU * v); }
+function gammaRand(k) {
+  if (k < 1) return gammaRand(k + 1) * Math.pow(Math.random(), 1 / k);
+  const d = k - 1 / 3, c = 1 / Math.sqrt(9 * d);
+  for (;;) { let x, v; do { x = randn(); v = 1 + c * x; } while (v <= 0); v = v * v * v; const u = Math.random();
+    if (u < 1 - 0.0331 * x * x * x * x || Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v; }
+}
+const betaRand = (a, b) => { const x = gammaRand(a), y = gammaRand(b); return x / (x + y); };
+const NN_IN = 8, NN_H = 8;
+const NN_LABELS = ['dist', 'speed', 'away', 'cross', 'air', 'aim', 'self', 'crouch'];
+const CTX = ['still', 'walking', 'flying'], TACTICS = ['stalk', 'ambush', 'flank'];
+const TRAITS = [['bold', 'shy', 'bold'], ['curious', 'cautious', 'curious'], ['active', 'lazy', 'energetic'], ['affection', 'aloof', 'affectionate']];
+const Brain = {
+  // --- 1. learned tactics: Beta-Bernoulli arms per (prey context x tactic), chosen by Thompson sampling
+  arms: null, episode: null, lesson: 'no hunts yet',
+  // --- 2. personality traits in [0,1]; 0.5 = neutral
+  traits: {bold: .5, curious: .5, active: .5, affection: .5}, drift: {bold: 0, curious: 0, active: 0, affection: 0},
+  // --- 3. neural lunge model: 8 -> 8 (tanh) -> 1 (sigmoid), trained online on every lunge outcome
+  W1: null, b1: null, W2: null, b2: 0, buf: [], recent: [], samples: 0, loss: 0,
+  live: {x: new Float32Array(NN_IN), h: new Float32Array(NN_H), p: 0, active: false},
+  init() {
+    this.arms = [
+      [{a: 2, b: 1}, {a: 1, b: 1.5}, {a: 1, b: 1}],   // still prey: instinct favours stalking
+      [{a: 1, b: 1}, {a: 1, b: 1}, {a: 2, b: 1}],     // walking prey: instinct favours flanking
+      [{a: 1, b: 1.5}, {a: 2, b: 1}, {a: 1, b: 1}],   // flying prey: instinct favours ambush
+    ].map(r => r.map(c => ({a: c.a, b: c.b, n: 0, w: 0})));
+    this.W1 = Array.from({length: NN_H}, () => Float32Array.from({length: NN_IN}, () => randn() * 0.5));
+    this.b1 = new Float32Array(NN_H); this.W2 = Float32Array.from({length: NN_H}, () => randn() * 0.5); this.b2 = 0;
+    // innate instinct: pre-train on a few synthetic "close, slow, grounded prey is catchable" examples
+    const inst = [];
+    for (let i = 0; i < 48; i++) {
+      const d = rnd(0.2, 1.6), sp = rnd(0, 1.5), air = Math.random() < 0.2 ? rnd(0.5, 1.2) : 0;
+      inst.push({x: [d, sp, rnd(-.5, .5) * sp, rnd(0, 1) * sp, air, rnd(0.6, 1), rnd(0, .5), rnd(0, 1)], y: d < 0.85 && sp < 0.8 && air === 0 ? 1 : 0});
+    }
+    for (let e = 0; e < 400; e++) this.sgd(inst[e % inst.length].x, inst[e % inst.length].y, 0.08);
+    this.samples = 0; this.recent = []; this.buf = [];
+  },
+  // ---------- neural net
+  forward(x, h) {
+    h = h || this._h || (this._h = new Float32Array(NN_H)); let z = this.b2;
+    for (let j = 0; j < NN_H; j++) { let a = this.b1[j]; const w = this.W1[j]; for (let i = 0; i < NN_IN; i++) a += w[i] * x[i]; h[j] = Math.tanh(a); z += this.W2[j] * h[j]; }
+    return 1 / (1 + Math.exp(-z));
+  },
+  sgd(x, y, lr) {
+    const h = this._hs || (this._hs = new Float32Array(NN_H)), p = this.forward(x, h), g = p - y;  // dBCE/dz
+    for (let j = 0; j < NN_H; j++) {
+      const gh = g * this.W2[j] * (1 - h[j] * h[j]);
+      this.W2[j] -= lr * (g * h[j] + 1e-4 * this.W2[j]);
+      const w = this.W1[j]; for (let i = 0; i < NN_IN; i++) w[i] -= lr * (gh * x[i] + 1e-4 * w[i]);
+      this.b1[j] -= lr * gh;
+    }
+    this.b2 -= lr * g;
+    return -(y * Math.log(p + 1e-7) + (1 - y) * Math.log(1 - p + 1e-7));
+  },
+  features(sp, T, out) {
+    const hp = sp.headPt(tmpB), dx = T.x - hp.x, dy = T.y - hp.y, d = Math.hypot(dx, dy) || 1, ux = dx / d, uy = dy / d;
+    const radial = T.vx * ux + T.vy * uy, cross = Math.abs(-T.vx * uy + T.vy * ux);
+    out[0] = clamp(d / sp.lungeR(), 0, 2); out[1] = clamp(T.speed / 100, 0, 2); out[2] = clamp(radial / 100, -2, 2); out[3] = clamp(cross / 100, 0, 2);
+    out[4] = clamp(T.z / 30, 0, 1.5); out[5] = Math.cos(angDiff(sp.heading, Math.atan2(dy, dx))); out[6] = clamp(sp.speed / 150, 0, 2); out[7] = sp.crouch;
+    return out;
+  },
+  learnLunge(x, hit, pPred) {
+    const y = hit ? 1 : 0; this.buf.push({x: Array.from(x, v => +v.toFixed(3)), y}); if (this.buf.length > 64) this.buf.shift();
+    let L = 0; for (let k = 0; k < 4; k++) L = this.sgd(x, y, 0.06);
+    for (let k = 0; k < 40; k++) { const b = this.buf[Math.random() * this.buf.length | 0]; this.sgd(b.x, b.y, 0.03); }
+    this.loss = L; this.samples++;
+    this.recent.push((pPred >= 0.5) === hit ? 1 : 0); if (this.recent.length > 20) this.recent.shift();
+  },
+  accuracy() { return this.recent.length ? this.recent.reduce((a, b) => a + b, 0) / this.recent.length : 0; },
+  // ---------- tactics
+  context(T) { return T.z > 12 || T.mode === 'fly' ? 2 : T.speed > 12 ? 1 : 0; },
+  chooseTactic(ctx) {
+    const bold = this.traits.bold; let best = 0, bs = -1;
+    for (let t = 0; t < 3; t++) {
+      const arm = this.arms[ctx][t];
+      const sc = betaRand(arm.a, arm.b) + (bold - 0.5) * 0.18 * (t === 1 ? -1 : 1);   // bold spiders prefer active tactics
+      if (sc > bs) { bs = sc; best = t; }
+    }
+    return best;
+  },
+  startEpisode(T, now) { const ctx = this.context(T); this.episode = {target: T, ctx, tactic: this.chooseTactic(ctx), t0: now, lunges: 0}; return this.episode; },
+  endEpisode(success, now, why) {
+    const e = this.episode; if (!e) return; this.episode = null;
+    const r = success ? 1 - Math.min(0.5, (now - e.t0) / 40) : 0;     // faster catches are worth more
+    const arm = this.arms[e.ctx][e.tactic]; arm.a += r; arm.b += 1 - r; arm.n++; if (success) arm.w++;
+    this.lesson = `${CTX[e.ctx]} prey: ${TACTICS[e.tactic]} ${success ? 'worked' : 'failed' + (why ? ' (' + why + ')' : '')} · ${arm.w}/${arm.n}`;
+  },
+  abandon() { this.episode = null; },
+  // ---------- personality
+  nudge(k, v) { const o = this.traits[k]; this.traits[k] = clamp(o + v, 0.05, 0.95); this.drift[k] += this.traits[k] - o; },
+  label() {
+    const parts = TRAITS.map(([k, lo, hi]) => ({d: this.traits[k] - 0.5, w: this.traits[k] >= 0.5 ? hi : lo})).filter(p => Math.abs(p.d) > 0.07)
+      .sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 2).map(p => p.w);
+    return parts.length ? parts.join(' · ') : 'balanced';
+  },
+  serialize() {
+    return {arms: this.arms, traits: this.traits, W1: this.W1.map(r => Array.from(r, v => +v.toFixed(4))), b1: Array.from(this.b1, v => +v.toFixed(4)),
+      W2: Array.from(this.W2, v => +v.toFixed(4)), b2: +this.b2.toFixed(4), buf: this.buf.slice(-48), samples: this.samples, recent: this.recent, lesson: this.lesson};
+  },
+  restore(d) {
+    if (!d) return;
+    try {
+      if (d.arms && d.arms.length === 3) this.arms = d.arms;
+      if (d.traits) for (const k in this.traits) if (typeof d.traits[k] === 'number') this.traits[k] = clamp(d.traits[k], 0.05, 0.95);
+      if (d.W1 && d.W1.length === NN_H) { this.W1 = d.W1.map(r => Float32Array.from(r)); this.b1 = Float32Array.from(d.b1); this.W2 = Float32Array.from(d.W2); this.b2 = +d.b2 || 0; }
+      if (Array.isArray(d.buf)) this.buf = d.buf; this.samples = d.samples | 0; if (Array.isArray(d.recent)) this.recent = d.recent; if (d.lesson) this.lesson = d.lesson;
+    } catch (e) {}
+  },
+};
+Brain.init();
+
 // ============================================================ spider
 const tmpA = {x: 0, y: 0}, tmpB = {x: 0, y: 0}, tmpC = {x: 0, y: 0};
 class Spider {
@@ -519,7 +633,7 @@ class Spider {
   toLocal(wx, wy, out) { const dx = wx - this.cx, dy = wy - this.cy; out.x = dx * this.cs + dy * this.sn; out.y = -dx * this.sn + dy * this.cs; return out; }
   headPt(out) { const k = 20 * this.scale; out.x = this.pos.x + Math.cos(this.heading) * k; out.y = this.pos.y + Math.sin(this.heading) * k; return out; }
   bodyR() { return 14 * this.scale; }
-  speedMul() { return (0.5 + 0.5 * this.scale) * (0.6 + 0.4 * this.energy); }
+  speedMul() { return (0.5 + 0.5 * this.scale) * (0.6 + 0.4 * this.energy) * (0.85 + 0.3 * Brain.traits.active); }
   lungeR() { return 70 * this.scale + 26; }
   restLocal(leg, out) {
     const a = REST_ANG[leg.idx], tuckMul = lerp(1, 0.34, this.tuck) * lerp(1, 1.06, this.crouch);
@@ -546,7 +660,11 @@ class Spider {
     const sleeping = this.state === 'SLEEP' && this.tuck > 0.5;
     this.hunger = clamp(this.hunger + dt / (sleeping ? 320 : 140), 0, 1);
     this.thirst = clamp(this.thirst + dt / (sleeping ? 420 : 200), 0, 1);
-    this.energy = clamp(this.energy + (sleeping ? dt / 40 : -dt / (this.state === 'LUNGE' || this.state === 'EVADE' ? 60 : 420)), 0, 1);
+    this.energy = clamp(this.energy + (sleeping ? dt / 40 : -dt * (0.8 + 0.4 * Brain.traits.active) / (this.state === 'LUNGE' || this.state === 'EVADE' ? 60 : 420)), 0, 1);
+    // personality drift from neglect & routine
+    if (this.hunger > 0.85) { Brain.nudge('affection', -dt * 0.0015); Brain.nudge('active', -dt * 0.001); }
+    if (sleeping && world.night) Brain.nudge('active', dt * 0.0012);
+    for (const k in Brain.drift) Brain.drift[k] *= Math.exp(-dt / 4);
     this.bond = clamp(this.bond - dt / 900, 0, 1);
     this.fresh = Math.max(0, this.fresh - dt / 30);
     this.lungeCD -= dt; this.settleCD -= dt;
@@ -580,21 +698,26 @@ class Spider {
       this.lkp = {x: best.x, y: best.y, vx: best.vx, vy: best.vy, t: now};
     } else {
       this.tVis = false; this.tFocus = false;
-      if (this.target && (this.target.dead || this.target.caught || now - this.lastSeen > 5)) this.target = null;
+      if (this.target && (this.target.dead || this.target.caught || now - this.lastSeen > 5)) {
+        if (Brain.episode && Brain.episode.target === this.target) Brain.endEpisode(false, now, this.target.mode === 'fly' ? 'it flew off' : 'lost it');
+        this.target = null;
+      }
       if (wasVis && this.lkp) this.lkp.t = now;
       if (this.lkp && now - this.lkp.t > 5) this.lkp = null;
     }
     // threats: fast cursor sweeps or pokes near the spider (felt as air currents / vibration)
     if (input.inside) {
       const d = Math.hypot(input.x - this.pos.x, input.y - this.pos.y);
-      const r = 150 + 90 * s;
-      if ((input.speed > 1000 && d < r) || (input.poke && d < 40 * s + 25)) {
+      const B = Brain.traits.bold, r = (150 + 90 * s) * (1.3 - 0.6 * B);
+      if ((input.speed > 1000 * (0.75 + 0.5 * B) && d < r) || (input.poke && d < 40 * s + 25)) {
+        this.threatPoke = !!input.poke;
         this.threat = {x: input.x, y: input.y}; this.threatT = now;
         world.danger[cellOf(this.pos.x, this.pos.y)] = Math.min(4, world.danger[cellOf(this.pos.x, this.pos.y)] + dt * 3 + (input.poke ? 1 : 0));
       }
       input.poke = false;
       const hp = this.headPt(tmpB);
-      this.friend = !input.down && input.still > 0.6 && Math.hypot(input.x - hp.x, input.y - hp.y) < 60 * s + 70;
+      this.friendD = Math.hypot(input.x - hp.x, input.y - hp.y);
+      this.friend = !input.down && input.still > 0.6 && this.friendD < 60 * s + 70 + Brain.traits.curious * 40 + Brain.traits.affection * 90 * Math.max(0, Brain.traits.affection - 0.5) * 2;
     } else this.friend = false;
     if (this.threat && now - this.threatT > 0.9) this.threat = null;
   }
@@ -614,7 +737,9 @@ class Spider {
     this.cover = null; this.coverT = 0; this.faceAlways = false;
     const pan = panOf(this.pos.x);
     if (st === 'LUNGE') { Snd.hydraulic(true, pan); this.fangT = 1; this.lockLunge = false; }
-    if (st === 'EVADE') { Snd.hydraulic(false, pan); }
+    if (st === 'EVADE') { Snd.hydraulic(false, pan); Brain.abandon(); Brain.nudge('bold', this.threatPoke ? -0.05 : -0.03); Brain.nudge('affection', -0.015); }
+    if (st === 'STALK') this.crouchT = clamp(P.cr * (1.2 - 0.4 * Brain.traits.bold), 0, 1);
+    if (st === 'INVESTIGATE' && this.stim) this.invT0 = world.time;
     if (st === 'MOLT') { this.moltT = 0; this.moltFrom = this.scale; this.moltDone = false; }
     if (st === 'PATROL') { this.pause = rnd(0.5, 1.5); this.wp = null; }
   }
@@ -666,14 +791,17 @@ class Spider {
     if (st === 'MOLT') return;
     if (this.threat && st !== 'EVADE') { if (st === 'FEED' && this.prey) { /* keeps prey in fangs while fleeing */ } this.enter('EVADE'); return; }
     if (st === 'LUNGE') {
-      if (this.stateT > 0.36) { this.lungeCD = 1.1; this.enter('STALK'); }
+      if (this.stateT > 0.36) {
+        if (this.lungeFeat) { Brain.learnLunge(this.lungeFeat, false, this.lungeP); this.lungeFeat = null; Brain.nudge('bold', -0.004); }
+        this.lungeCD = 1.1; this.enter('STALK');
+      }
       return;
     }
     if (st === 'FEED') {
       if (this.stateT > (this.feedKind === 'water' ? 2.6 : 4.6)) this.finishFeed();
       return;
     }
-    if (st === 'EVADE') { if (!this.threat && this.stateT > 2.6) this.enter(world.night ? 'SLEEP' : 'PATROL'); return; }
+    if (st === 'EVADE') { if (!this.threat && this.stateT > 2.6 * (1.5 - Brain.traits.bold)) this.enter(world.night ? 'SLEEP' : 'PATROL'); return; }
     if (this.utilT > 0) return;
     this.utilT = 0.12;
     if (this.stage < 3 && this.xp >= STAGES[this.stage].xp && !this.tVis && !world.night) { this.enter('MOLT'); return; }
@@ -691,26 +819,52 @@ class Spider {
     const hungry = this.hunger > 0.16;
     const uHunt = T && hungry && (this.tVis || world.time - this.lastSeen < 0.6) ? 0.3 + this.hunger : 0;
     const uDrink = drop && this.thirst > 0.28 ? this.thirst * 1.3 : 0;
-    const uInv = this.stim && hungry ? 0.45 : (this.lkp && hungry ? 0.4 + this.hunger * 0.3 : (T && this.tVis && hungry ? 0.5 : 0));
+    const uInv = (this.stim && hungry ? 0.45 : (this.lkp && hungry ? 0.4 + this.hunger * 0.3 : (T && this.tVis && hungry ? 0.5 : 0))) * (0.6 + 0.8 * Brain.traits.curious);
     const uPatrol = 0.25;
     const m = Math.max(uHunt, uDrink, uInv, uPatrol);
     if (m === uHunt && uHunt > 0 && (this.tFocus || this.isHunting())) {
-      const hp = this.headPt(tmpB), d = Math.hypot(T.x - hp.x, T.y - hp.y), fly = T.z > 12, lr = this.lungeR();
-      if (!fly && d < lr && this.lungeCD <= 0 && this.tFocus) this.enter('LUNGE');
-      else if (fly && d > lr * 1.2) this.enter(T.z < 20 && d < 200 && T.speed > 50 ? 'FLANK_INTERCEPT' : 'AMBUSH_COVER');
-      else if (!fly && T.speed > (st === 'FLANK_INTERCEPT' ? 16 : 30) && d > lr * 1.3) this.enter('FLANK_INTERCEPT');
-      else this.enter('STALK');
+      const hp = this.headPt(tmpB), d = Math.hypot(T.x - hp.x, T.y - hp.y), fly = T.z > 12, lr = this.lungeR(), now = world.time;
+      // 1. learned tactics: one episode per target, tactic picked by Thompson sampling over past outcomes
+      let ep = Brain.episode;
+      if (!ep || ep.target !== T) {
+        if (ep) Brain.abandon();   // switching targets isn't the tactic's fault
+        ep = Brain.startEpisode(T, now);
+        if (this.invT0 && now - this.invT0 < 8) Brain.nudge('curious', 0.02);   // investigating paid off
+        this.invT0 = 0;
+      }
+      if (now - ep.t0 > 30) { Brain.endEpisode(false, now, 'gave up'); this.target = null; this.lkp = null; this.enter('PATROL'); this.pause = rnd(1, 2); return; }
+      // 3. neural strike decision: lunge when the model predicts a catch is likely enough
+      if (!fly && this.tFocus && this.lungeCD <= 0 && d < lr * 1.35) {
+        const x = Brain.features(this, T, this.lungeX || (this.lungeX = new Float32Array(NN_IN))), pr = Brain.forward(x);
+        const thr = lerp(0.62, 0.32, this.hunger) - (Brain.traits.bold - 0.5) * 0.16;
+        this.inRangeT = (this.inRangeT || 0) + 0.12;
+        const explore = Math.random() < 0.03, impatient = this.inRangeT > 5;
+        if (pr > thr || explore || impatient) {
+          this.lungeFeat = Float32Array.from(x); this.lungeP = pr; this.lungeWhy = pr > thr ? 'model' : explore ? 'explore' : 'impatient';
+          ep.lunges++; this.inRangeT = 0; this.enter('LUNGE'); return;
+        }
+      } else this.inRangeT = 0;
+      const tac = TACTICS[ep.tactic]; let next = 'STALK';
+      if (tac === 'ambush') next = fly || d > lr * 2.2 ? 'AMBUSH_COVER' : 'STALK';
+      else if (tac === 'flank') next = T.speed > 16 && d > lr * 1.1 ? 'FLANK_INTERCEPT' : 'STALK';
+      this.enter(next);
       return;
     }
     if (m === uDrink && uDrink > 0) { this.drop = drop; this.enter('INVESTIGATE'); this.sub = 'water'; return; }
     if (m === uInv && uInv > 0) { if (st !== 'INVESTIGATE') this.enter('INVESTIGATE'); this.sub = this.stim ? 'vibration' : this.lkp && !this.tVis ? 'last-known' : 'motion'; return; }
     if (st !== 'PATROL' && st !== 'INVESTIGATE') this.enter('PATROL');
-    if (st === 'INVESTIGATE' && this.stateT > 1.5 && !this.stim && !this.lkp && this.sub !== 'water') this.enter('PATROL');
+    if (st === 'INVESTIGATE' && this.stateT > 1.5 * (0.5 + Brain.traits.curious) && !this.stim && !this.lkp && this.sub !== 'water') {
+      if (this.invT0) { Brain.nudge('curious', -0.006); this.invT0 = 0; }   // a false alarm
+      this.enter('PATROL');
+    }
     if (st === 'INVESTIGATE' && this.sub === 'water' && !world.drops.includes(this.drop)) this.enter('PATROL');
   }
   isHunting() { const s = this.state; return s === 'STALK' || s === 'AMBUSH_COVER' || s === 'FLANK_INTERCEPT' || s === 'LUNGE'; }
   capture(f) {
     f.caught = true; this.prey = f; this.target = null; this.lkp = null; this.feedKind = 'prey';
+    if (this.lungeFeat) { Brain.learnLunge(this.lungeFeat, true, this.lungeP); this.lungeFeat = null; }
+    Brain.endEpisode(true, world.time); Brain.nudge('bold', 0.004);
+    if (f.byUser) Brain.nudge('affection', 0.02);
     world.yield[cellOf(this.pos.x, this.pos.y)] = Math.min(5, world.yield[cellOf(this.pos.x, this.pos.y)] + 1);
     Snd.crunch(panOf(this.pos.x));
     this.enter('FEED');
@@ -720,7 +874,7 @@ class Spider {
       this.prey.dead = true; this.prey = null;
       this.hunger = clamp(this.hunger - 0.5, 0, 1); this.xp += 24; this.bond = clamp(this.bond + 0.02, 0, 1);
     } else if (this.feedKind === 'water') {
-      this.xp += 6;
+      this.xp += 6; Brain.nudge('active', 0.01);
     }
     this.feedKind = null; this.fangT = 0;
     this.enter('PATROL'); this.pause = rnd(1, 2.5);
@@ -737,11 +891,19 @@ class Spider {
     if (st !== 'LUNGE' && st !== 'FEED') this.fangT = 0;
     switch (st) {
       case 'PATROL': {
-        if (this.friend) { setFace(input.x, input.y); this.palpMode = 'reach'; this.bond = clamp(this.bond + dt * 0.006, 0, 1); this.sub = 'curious'; break; }
+        if (this.friend) {
+          setFace(input.x, input.y); this.palpMode = 'reach'; this.bond = clamp(this.bond + dt * 0.006, 0, 1); this.sub = 'curious';
+          Brain.nudge('affection', dt * 0.0015); Brain.nudge('curious', dt * 0.0008);
+          if (Brain.traits.affection > 0.55 && this.friendD > 55 * s + 30) {   // affectionate: walks over to you
+            const a = Math.atan2(input.y - this.pos.y, input.x - this.pos.x), k = 45 * s + 20;
+            setGoal(input.x - Math.cos(a) * k, input.y - Math.sin(a) * k); v *= 0.6; this.sub = 'coming over';
+          }
+          break;
+        }
         this.palpMode = this.pause > 0 ? 'tap' : 'rest';
         if (this.pause > 0) { this.pause -= dt; this.sub = 'pause'; break; }
         if (!this.wp || Math.hypot(this.wp.x - this.pos.x, this.wp.y - this.pos.y) < 18) {
-          if (this.wp) { this.wp = null; this.pause = rnd(1, 3); break; }
+          if (this.wp) { this.wp = null; this.pause = rnd(1, 3) * (1.7 - 0.8 * Brain.traits.active - 0.4 * Brain.traits.curious); break; }
           this.wp = this.pickWaypoint();
         }
         this.sub = 'roam'; setGoal(this.wp.x, this.wp.y);
@@ -851,9 +1013,10 @@ class Spider {
         break;
       }
       case 'GREET': {
-        setFace(input.x, input.y); this.bond = clamp(this.bond + dt * 0.05, 0, 1); this.xp += dt * 1.2;
+        setFace(input.x, input.y); this.bond = clamp(this.bond + dt * 0.05 * (0.5 + Brain.traits.affection), 0, 1); this.xp += dt * 1.2;
+        Brain.nudge('affection', dt * 0.006); Brain.nudge('bold', dt * 0.002);
         this.chirpT -= dt;
-        if (this.chirpT <= 0) { this.chirpT = 0.8; Snd.chirp(1150 + this.bond * 500, 0, 0.06); world.parts.push({x: this.pos.x + rnd(-8, 8), y: this.pos.y - 20 * s, vy: -22, life: 1.4, t: '♥'}); }
+        if (this.chirpT <= 0) { this.chirpT = 1.2 - 0.6 * Brain.traits.affection; Snd.chirp(1150 + this.bond * 500, 0, 0.06); world.parts.push({x: this.pos.x + rnd(-8, 8), y: this.pos.y - 20 * s, vy: -22, life: 1.4, t: '♥'}); }
         break;
       }
       case 'SLEEP': {
@@ -1156,6 +1319,8 @@ class Spider {
     this.needs(dt); this.sense(dt); this.think(dt); this.plan(dt); this.move(dt);
     this.gait(dt); this.updateBody(dt); this.updatePalps(dt); this.solveIK(dt);
     if (this.prey) { this.headPt(tmpA); this.prey.x = tmpA.x; this.prey.y = tmpA.y; }
+    const lv = Brain.live; lv.active = !!(Brain.episode && this.target && this.tVis);
+    if (lv.active) lv.p = Brain.forward(Brain.features(this, this.target, lv.x), lv.h);
   }
 
   makeExuvia() {
@@ -1335,7 +1500,7 @@ function save() {
   try {
     const s = spider;
     localStorage.setItem(SAVE_KEY, JSON.stringify({stage: s.stage, xp: +s.xp.toFixed(2), hunger: +s.hunger.toFixed(3), thirst: +s.thirst.toFixed(3),
-      energy: +s.energy.toFixed(3), bond: +s.bond.toFixed(3), age: Math.round(s.age), exuviae: world.exuviae}));
+      energy: +s.energy.toFixed(3), bond: +s.bond.toFixed(3), age: Math.round(s.age), exuviae: world.exuviae, brain: Brain.serialize()}));
   } catch (e) {}
 }
 function load() {
@@ -1346,6 +1511,7 @@ function load() {
     s.hunger = clamp(+d.hunger || 0.4, 0, 1); s.thirst = clamp(+d.thirst || 0.3, 0, 1); s.energy = clamp(d.energy == null ? 0.9 : +d.energy, 0.2, 1);
     s.bond = clamp(+d.bond || 0.2, 0, 1); s.age = +d.age || 0;
     if (Array.isArray(d.exuviae)) world.exuviae = d.exuviae.slice(-8);
+    Brain.restore(d.brain);
   } catch (e) {}
 }
 
@@ -1369,6 +1535,8 @@ document.querySelectorAll('[data-tool]').forEach(b => b.addEventListener('click'
 function toggleNight() { world.night = !world.night; $('night').classList.toggle('on', world.night); }
 function toggleCPG() { world.cpg = !world.cpg; $('cpg').classList.toggle('on', world.cpg); }
 $('cpg').onclick = toggleCPG;
+function toggleBrain() { world.brain = !world.brain; $('brainb').classList.toggle('on', world.brain); }
+$('brainb').onclick = toggleBrain;
 function toggleSenses() { world.senses = !world.senses; $('senses').classList.toggle('on', world.senses); }
 function toggleMute() { Snd.init(); Snd.setMuted(!Snd.muted); $('mute').innerHTML = '<kbd>M</kbd>' + (Snd.muted ? 'Muted' : 'Sound on'); $('mute').classList.toggle('on', Snd.muted); }
 $('night').onclick = toggleNight; $('senses').onclick = toggleSenses; $('mute').onclick = toggleMute;
@@ -1378,7 +1546,7 @@ addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
   if (k === '1') setTool('observe'); else if (k === '2') setTool('prey'); else if (k === '3') setTool('mist'); else if (k === '4') setTool('pet');
-  else if (k === 'c') toggleCPG(); else if (k === 'n') toggleNight(); else if (k === 's') toggleSenses(); else if (k === 'm') toggleMute();
+  else if (k === 'c') toggleCPG(); else if (k === 'b') toggleBrain(); else if (k === 'n') toggleNight(); else if (k === 's') toggleSenses(); else if (k === 'm') toggleMute();
 });
 document.addEventListener('pointerdown', () => Snd.init(), {capture: true});
 
@@ -1500,10 +1668,12 @@ function drawSenses(c) {
   if (s.cover && (s.state === 'EVADE' || s.state === 'AMBUSH_COVER')) { c.strokeStyle = 'rgba(140,200,160,0.35)'; c.beginPath(); c.rect(s.cover.x - 4, s.cover.y - 4, 8, 8); c.stroke(); }
 }
 
+let _tbTop = 0, _tbT = -1;
+function tbTop() { const t = performance.now(); if (t - _tbT > 500) { _tbT = t; const el = document.getElementById('tb'); _tbTop = el ? el.getBoundingClientRect().top : H - 60; } return _tbTop; }
 // ---- live Central Pattern Generator network panel
 function drawCPG(c) {
   const sp = spider, L = sp.legs, small = W < 700, k = small ? 0.72 : 1;
-  const pw = 176 * k, ph = 262 * k, px = W - pw - 12, py = small ? 12 : H - ph - 64;
+  const pw = 176 * k, ph = 262 * k, px = W - pw - 12, py = small ? 12 : Math.max(12, tbTop() - ph - 10);
   c.save(); c.translate(px, py); c.scale(k, k);
   c.fillStyle = 'rgba(3,4,8,0.88)'; c.strokeStyle = '#1e2731'; c.lineWidth = 1;
   c.beginPath(); c.rect(0.5, 0.5, 175, 261); c.fill(); c.stroke();
@@ -1548,6 +1718,75 @@ function drawCPG(c) {
   c.restore();
 }
 
+// ---- live brain panel: neural strike model, learned tactics, personality
+function drawBrain(c) {
+  const small = W < 700, k = small ? 0.62 : 1, pw = 248, ph = 376;
+  const px = 12, py = Math.max(small ? 250 : 12, tbTop() - ph * k - 10);
+  c.save(); c.translate(px, py); c.scale(k, k);
+  c.fillStyle = 'rgba(3,4,8,0.88)'; c.strokeStyle = '#1e2731'; c.lineWidth = 1; c.beginPath(); c.rect(0.5, 0.5, pw - 1, ph - 1); c.fill(); c.stroke();
+  c.font = '10px ui-monospace,Menlo,Consolas,monospace'; c.textAlign = 'start';
+  c.fillStyle = '#6b7987'; c.fillText('BRAIN', 10, 16); c.fillStyle = '#d9a441'; c.textAlign = 'right'; c.fillText(Brain.label(), pw - 10, 16); c.textAlign = 'start';
+  // -- neural net 8-8-1
+  const lv = Brain.live, X = lv.x, Hh = lv.h, inX = 62, hX = 132, oX = 196, y0 = 34, dy = 14;
+  const iy = i => y0 + i * dy, hy = j => y0 + j * dy;
+  for (let j = 0; j < NN_H; j++) for (let i = 0; i < NN_IN; i++) {
+    const w = Brain.W1[j][i], a = Math.min(0.75, Math.abs(w) * 0.35);
+    if (a < 0.04) continue;
+    c.strokeStyle = w > 0 ? `rgba(60,90,255,${a.toFixed(3)})` : `rgba(255,120,60,${a.toFixed(3)})`; c.lineWidth = 0.4 + Math.min(1.6, Math.abs(w) * 0.6);
+    c.beginPath(); c.moveTo(inX, iy(i)); c.lineTo(hX, hy(j)); c.stroke();
+  }
+  const oy = y0 + 3.5 * dy;
+  for (let j = 0; j < NN_H; j++) {
+    const w = Brain.W2[j], a = Math.min(0.85, Math.abs(w) * 0.3);
+    c.strokeStyle = w > 0 ? `rgba(60,90,255,${a.toFixed(3)})` : `rgba(255,120,60,${a.toFixed(3)})`; c.lineWidth = 0.5 + Math.min(2, Math.abs(w) * 0.5);
+    c.beginPath(); c.moveTo(hX, hy(j)); c.lineTo(oX, oy); c.stroke();
+  }
+  const act = lv.active ? 1 : 0.35;
+  for (let i = 0; i < NN_IN; i++) {
+    const v = clamp(Math.abs(X[i]), 0, 1) * act;
+    c.fillStyle = `rgba(255,176,46,${(0.12 + 0.8 * v).toFixed(3)})`; c.beginPath(); c.arc(inX, iy(i), 4.2, 0, TAU); c.fill();
+    c.strokeStyle = '#ff3b30'; c.lineWidth = 1; c.stroke();
+    c.fillStyle = '#6b7987'; c.fillText(NN_LABELS[i], 10, iy(i) + 3);
+  }
+  for (let j = 0; j < NN_H; j++) {
+    const v = Hh[j] * act; c.fillStyle = v >= 0 ? `rgba(90,120,255,${(0.15 + 0.8 * v).toFixed(3)})` : `rgba(255,130,70,${(0.15 - 0.8 * v).toFixed(3)})`;
+    c.beginPath(); c.arc(hX, hy(j), 4.6, 0, TAU); c.fill(); c.strokeStyle = '#ff3b30'; c.stroke();
+  }
+  c.fillStyle = `rgba(255,176,46,${(0.2 + 0.8 * lv.p * act).toFixed(3)})`; c.beginPath(); c.arc(oX, oy, 9, 0, TAU); c.fill(); c.strokeStyle = '#ff3b30'; c.lineWidth = 1.4; c.stroke();
+  c.fillStyle = '#e6edf3'; c.textAlign = 'center'; c.fillText(lv.active ? Math.round(lv.p * 100) + '%' : '—', oX, oy + 22); c.fillStyle = '#6b7987'; c.fillText('P(catch)', oX, oy - 14); c.textAlign = 'start';
+  c.fillStyle = '#8f9cab';
+  c.fillText(`strike model · ${Brain.samples} lunges · acc ${Brain.recent.length ? Math.round(Brain.accuracy() * 100) + '%' : '—'}`, 10, 160);
+  // -- tactics table
+  const tx0 = 70, cw = 52, ty0 = 180;
+  c.fillStyle = '#6b7987'; c.fillText('TACTICS', 10, ty0);
+  c.textAlign = 'center'; TACTICS.forEach((t, j) => c.fillText(t, tx0 + j * cw + cw / 2, ty0)); c.textAlign = 'start';
+  const ep = Brain.episode;
+  for (let i = 0; i < 3; i++) {
+    const y = ty0 + 8 + i * 18; c.fillStyle = '#6b7987'; c.fillText(CTX[i], 10, y + 11);
+    let bestJ = 0, bm = -1; for (let j = 0; j < 3; j++) { const a = Brain.arms[i][j], m = a.a / (a.a + a.b); if (m > bm) { bm = m; bestJ = j; } }
+    for (let j = 0; j < 3; j++) {
+      const a = Brain.arms[i][j], m = a.a / (a.a + a.b), x = tx0 + j * cw + 2;
+      c.fillStyle = `rgba(217,164,65,${(0.06 + 0.5 * m * m).toFixed(3)})`; c.fillRect(x, y, cw - 4, 15);
+      if (j === bestJ) { c.strokeStyle = 'rgba(217,164,65,0.6)'; c.lineWidth = 1; c.strokeRect(x + .5, y + .5, cw - 5, 14); }
+      if (ep && ep.ctx === i && ep.tactic === j) { c.strokeStyle = '#ff3b30'; c.lineWidth = 1.5; c.strokeRect(x - .5, y - .5, cw - 3, 16); }
+      c.fillStyle = '#e6edf3'; c.textAlign = 'center'; c.fillText(Math.round(m * 100) + '% ' + a.n, x + (cw - 4) / 2, y + 11); c.textAlign = 'start';
+    }
+  }
+  // -- personality
+  const py0 = 256; c.fillStyle = '#6b7987'; c.fillText('PERSONALITY', 10, py0);
+  TRAITS.forEach(([key, lo, hi], i) => {
+    const y = py0 + 16 + i * 20, v = Brain.traits[key], bx = 72, bw = 86;
+    c.fillStyle = '#6b7987'; c.textAlign = 'right'; c.fillText(lo, bx - 6, y + 4); c.textAlign = 'start'; c.fillText(hi, bx + bw + 6, y + 4);
+    c.fillStyle = '#161d25'; c.fillRect(bx, y - 2, bw, 4); c.fillStyle = '#34414f'; c.fillRect(bx + bw / 2 - .5, y - 4, 1, 8);
+    c.fillStyle = '#c97bb0'; const mx = bx + v * bw; c.fillRect(Math.min(mx, bx + bw / 2), y - 2, Math.abs(mx - (bx + bw / 2)), 4);
+    c.beginPath(); c.arc(mx, y, 3.6, 0, TAU); c.fill();
+    const d = Brain.drift[key]; if (Math.abs(d) > 0.002) { c.fillStyle = d > 0 ? '#73b977' : '#d9744a'; c.fillText(d > 0 ? '▲' : '▼', mx - 3.5, y - 6); }
+  });
+  c.fillStyle = '#6b7987'; c.fillText('LAST LESSON', 10, 356);
+  c.fillStyle = '#c7d1db'; c.fillText(Brain.lesson.length > 38 ? Brain.lesson.slice(0, 37) + '…' : Brain.lesson, 10, 369);
+  c.restore();
+}
+
 function render() {
   const c = ctx;
   c.setTransform(1, 0, 0, 1, 0, 0);
@@ -1585,17 +1824,19 @@ function render() {
   }
   c.globalAlpha = 1; c.textAlign = 'start';
   if (world.cpg) drawCPG(c);
+  if (world.brain) drawBrain(c);
   // pet cursor ring
   if (world.tool === 'pet' && input.inside) { c.strokeStyle = input.petting ? 'rgba(215,127,180,0.7)' : 'rgba(215,127,180,0.3)'; c.lineWidth = 1; c.beginPath(); c.arc(input.x, input.y, 12, 0, TAU); c.stroke(); }
 }
 
 // ============================================================ HUD
 const hudEls = {};
-['stage', 'st', 'vh', 'bh', 'vt', 'bt', 've', 'be', 'vb', 'bb', 'vx', 'bx', 'age', 'fps'].forEach(id => hudEls[id] = $(id));
+['stage', 'st', 'mind', 'vh', 'bh', 'vt', 'bt', 've', 'be', 'vb', 'bb', 'vx', 'bx', 'age', 'fps'].forEach(id => hudEls[id] = $(id));
 function updateHUD(fps) {
   const s = spider, pct = v => Math.round(v * 100) + '%';
   hudEls.stage.textContent = STAGES[s.stage].name;
-  hudEls.st.textContent = s.state + (s.sub ? ' · ' + s.sub : '');
+  hudEls.st.textContent = s.state + (s.sub ? ' · ' + s.sub : '') + (Brain.episode ? ' · ' + TACTICS[Brain.episode.tactic] : '');
+  hudEls.mind.textContent = Brain.label();
   hudEls.vh.textContent = pct(1 - s.hunger); hudEls.bh.style.width = pct(1 - s.hunger);
   hudEls.vt.textContent = pct(1 - s.thirst); hudEls.bt.style.width = pct(1 - s.thirst);
   hudEls.ve.textContent = pct(s.energy); hudEls.be.style.width = pct(s.energy);
@@ -1624,7 +1865,7 @@ function frame(now) {
 addEventListener('resize', resize);
 addEventListener('beforeunload', save);
 document.addEventListener('visibilitychange', () => { last = performance.now(); if (document.hidden) save(); });
-window.__AG = {spider, world, Fly, input, STAGES};
+window.__AG = {spider, world, Fly, input, STAGES, Brain};
 requestAnimationFrame(frame);
 })();
 </script>
