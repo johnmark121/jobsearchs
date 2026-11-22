@@ -28,6 +28,20 @@ button kbd{color:var(--dim);font:inherit;margin-right:4px}
 #tip{position:fixed;right:12px;top:12px;max-width:260px;color:var(--dim);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;z-index:2;transition:opacity 1s}
 #tip b{color:var(--txt)}
 @media (max-width:640px){#tip{display:none}#hud{width:200px}}
+#online{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(440px,calc(100% - 24px));max-height:min(620px,calc(100% - 120px));overflow:auto;background:rgba(10,13,18,.97);border:1px solid #2a3541;border-radius:10px;padding:14px 16px;z-index:5;display:none;box-shadow:0 10px 40px rgba(0,0,0,.6)}
+#online.open{display:block}
+#online h3{margin:0 0 8px;font-size:13px;color:var(--acc);letter-spacing:.06em;display:flex;justify-content:space-between;align-items:center}
+#online input{font:inherit;color:var(--txt);background:#0d1218;border:1px solid var(--line);border-radius:5px;padding:7px 8px;width:100%;margin:4px 0}
+#online .row2{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+#online .tabs{display:flex;gap:4px;margin:8px 0;flex-wrap:wrap}
+#online .card{border:1px solid var(--line);border-radius:7px;padding:8px 10px;margin:6px 0;display:flex;gap:10px;align-items:center}
+#online .sw{width:16px;height:16px;border-radius:50%;flex:none;border:1px solid #000}
+#online .grow{flex:1;min-width:0}
+#online .grow b{color:#e6edf3}
+#online .muted{color:var(--dim)}
+#online .msg{color:var(--warn);min-height:14px;margin-top:4px}
+#online table{width:100%;border-collapse:collapse}#online td{padding:3px 4px;border-bottom:1px solid #161d25}
+#online code{color:var(--acc)}
 </style>
 </head>
 <body>
@@ -50,7 +64,8 @@ Your spider hatches from an egg sac (hold <b>Pet</b> on it to warm it) and grows
 <b>1 Observe</b> – rest the cursor near your spider to be greeted by its pedipalps; flick it fast and it bolts for cover.<br>
 <b>2 Prey</b> – click to drop a fly. <b>3 Mist</b> – click to spray water droplets.<br>
 <b>4 Pet</b> – press and hold on its body.<br>
-<b>N</b> night · <b>S</b> senses overlay · <b>V</b> visual style · <b>C</b> CPG network · <b>B</b> brain · <b>M</b> sound. Audio unlocks on first click.</div>
+<b>N</b> night · <b>S</b> senses overlay · <b>O</b> online · <b>V</b> visual style · <b>C</b> CPG network · <b>B</b> brain · <b>M</b> sound. Audio unlocks on first click.</div>
+<div id="online" role="dialog" aria-label="Online"><h3><span>ONLINE</span><button id="onclose" title="Close">✕</button></h3><div id="onbody"></div></div>
 <div id="tb">
   <button data-tool="observe" class="on"><kbd>1</kbd>Observe</button>
   <button data-tool="prey"><kbd>2</kbd>Prey</button>
@@ -63,6 +78,7 @@ Your spider hatches from an egg sac (hold <b>Pet</b> on it to warm it) and grows
   <button id="brainb" class="on"><kbd>B</kbd>Brain</button>
   <button id="stylev"><kbd>V</kbd>Natural</button>
   <button id="mute"><kbd>M</kbd>Sound on</button>
+  <button id="onlineb"><kbd>O</kbd>Online</button>
   <button id="reset">New egg</button>
 </div>
 <script>
@@ -361,7 +377,7 @@ const panOf = x => clamp((x / W) * 2 - 1, -1, 1) * 0.8;
 
 // ============================================================ world
 const world = {
-  time: 0, flies: [], drops: [], exuviae: [], parts: [], egg: null, night: false, senses: true, cpg: true, brain: true, style: 0, tool: 'observe', spawnT: 4,
+  time: 0, flies: [], drops: [], exuviae: [], parts: [], egg: null, night: false, senses: true, cpg: true, brain: true, style: 0, eggInv: [], tool: 'observe', spawnT: 4,
   danger: new Float32Array(GW * GH), yield: new Float32Array(GW * GH),
 };
 const input = {x: -9999, y: -9999, vx: 0, vy: 0, speed: 0, inside: false, down: false, still: 0, lastT: 0, lastMove: 0, petting: false};
@@ -592,6 +608,7 @@ const Brain = {
   startEpisode(T, now) { const ctx = this.context(T); this.episode = {target: T, ctx, tactic: this.chooseTactic(ctx), t0: now, lunges: 0}; return this.episode; },
   endEpisode(success, now, why) {
     const e = this.episode; if (!e) return; this.episode = null;
+    if (typeof spider !== 'undefined' && spider) { spider.stats.hunts++; if (success) spider.stats.catches++; }
     const r = success ? 1 - Math.min(0.5, (now - e.t0) / 40) : 0;     // faster catches are worth more
     const arm = this.arms[e.ctx][e.tactic]; arm.a += r; arm.b += 1 - r; arm.n++; if (success) arm.w++;
     this.lesson = `${CTX[e.ctx]} prey: ${TACTICS[e.tactic]} ${success ? 'worked' : 'failed' + (why ? ' (' + why + ')' : '')} · ${arm.w}/${arm.n}`;
@@ -628,7 +645,7 @@ function makeGenome() {
   const g = (m, sd, lo, hi) => clamp(m + randn() * sd, lo, hi), pick = a => a[Math.random() * a.length | 0];
   let name = pick(SYL) + pick(SYL) + (Math.random() < 0.5 ? pick(SYL) : ''); name = name[0].toUpperCase() + name.slice(1);
   let w = Math.random() * 100, m = MORPHS[0]; for (const mm of MORPHS) { if (w < mm[1]) { m = mm; break; } w -= mm[1]; }
-  return {name, sex: Math.random() < 0.5 ? 'female' : 'male', morph: m[0],
+  return {gen: 1, parents: null, name, sex: Math.random() < 0.5 ? 'female' : 'male', morph: m[0],
     hue: m[2] + g(0, 4, -10, 10), sat: g(m[3], 0.04, 0.03, 0.6), lit: g(m[4], 0.02, 0.12, 0.32), contrast: g(1, 0.15, 0.7, 1.35),
     size: g(1, 0.06, 0.88, 1.14), leg: g(1, 0.05, 0.9, 1.12), eye: g(1, 0.08, 0.85, 1.2), abd: g(1, 0.07, 0.85, 1.18), speed: g(1, 0.06, 0.88, 1.12),
     chevrons: 3 + (Math.random() * 3 | 0),
@@ -650,7 +667,7 @@ class Spider {
   constructor() {
     this.pos = {x: 0, y: 0}; this.vel = {x: 0, y: 0}; this.heading = -PI / 2; this.hv = {v: 0}; this.angVel = 0; this.speed = 0;
     this.stage = 0; this.scale = STAGES[0].scale; this.genome = null; this.bornAt = 0; this.stageStart = 0; this.meals = 0;
-    this.premolt = false; this.premoltK = 0; this.legX = 1;
+    this.premolt = false; this.premoltK = 0; this.legX = 1; this.stats = {meals: 0, hunts: 0, catches: 0};
     this.camo = 0; this.display = 0; this.armWave = 0; this.splay = 1; this.cageT = 0; this.hopZ = 0; this.softT = 0; this.belief = 0; this.cloudPh = 0; this.cloudRate = 1; this.envPt = {x: 0, y: 0};
     this.hunger = 0.45; this.thirst = 0.3; this.energy = 0.9; this.bond = 0.2; this.age = 0; this.fresh = 0;
     this.crouch = 0; this.crouchT = 0; this.crouchV = {v: 0}; this.tuck = 0;
@@ -960,7 +977,7 @@ class Spider {
   finishFeed() {
     if (this.feedKind === 'prey' && this.prey) {
       this.prey.dead = true; this.prey = null;
-      this.hunger = clamp(this.hunger - 0.5, 0, 1); this.meals++; this.bond = clamp(this.bond + 0.02, 0, 1);
+      this.hunger = clamp(this.hunger - 0.5, 0, 1); this.meals++; this.stats.meals++; if (typeof Online !== 'undefined') Online.queue(true); this.bond = clamp(this.bond + 0.02, 0, 1);
     } else if (this.feedKind === 'water') {
       Brain.nudge('active', 0.01);
     }
@@ -1155,6 +1172,7 @@ class Spider {
         }
         if (t >= MOLT_END) {
           this.stage = Math.min(ADULT, this.stage + 1); this.scale = this.targetScale(); this.meals = 0; this.stageStart = gameNow(); this.premolt = false; this.refreshLimbs();
+          if (typeof Online !== 'undefined') Online.queue(true);
           Snd.stageUp(); world.parts.push({x: this.pos.x, y: this.pos.y - 30 * this.scale, vy: -16, life: 2.2, t: STAGES[this.stage].name, big: true});
           save(); this.enter('PATROL');
         }
@@ -1670,14 +1688,18 @@ function drawExuvia(c, e) {
 }
 
 // ============================================================ persistence (real-time aware)
+let suppressSave = false;   // set while swapping in a cloud save, so the unload handler can't overwrite it
+function saveData() {
+  const s = spider, e = world.egg;
+  return {v: 2, savedAt: gameNow(), genome: s.genome, bornAt: s.bornAt, stageStart: s.stageStart, meals: s.meals,
+    egg: e ? {u: e.u, v: e.v, laid: e.laid} : null, stage: s.stage, fresh: +s.fresh.toFixed(3),
+    hunger: +s.hunger.toFixed(3), thirst: +s.thirst.toFixed(3), energy: +s.energy.toFixed(3), bond: +s.bond.toFixed(3),
+    stats: s.stats, eggInv: world.eggInv, exuviae: world.exuviae, brain: Brain.serialize()};
+}
 function save() {
-  try {
-    const s = spider, e = world.egg;
-    localStorage.setItem(SAVE_KEY, JSON.stringify({v: 2, savedAt: gameNow(), genome: s.genome, bornAt: s.bornAt, stageStart: s.stageStart, meals: s.meals,
-      egg: e ? {u: e.u, v: e.v, laid: e.laid} : null, stage: s.stage, fresh: +s.fresh.toFixed(3),
-      hunger: +s.hunger.toFixed(3), thirst: +s.thirst.toFixed(3), energy: +s.energy.toFixed(3), bond: +s.bond.toFixed(3),
-      exuviae: world.exuviae, brain: Brain.serialize()}));
-  } catch (e) {}
+  if (suppressSave) return;
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(saveData())); } catch (e) {}
+  if (typeof Online !== 'undefined') Online.queue(false);
 }
 function load() {
   let d = null;
@@ -1702,14 +1724,16 @@ function load() {
     }
     if (Array.isArray(d.exuviae)) world.exuviae = d.exuviae.filter(e => e && e.legs).map(e => (e.born = e.born || now, e)).slice(-8);
     if (d.egg) world.egg = {u: d.egg.u, v: d.egg.v, laid: d.egg.laid};
+    if (d.stats) s.stats = {meals: d.stats.meals | 0, hunts: d.stats.hunts | 0, catches: d.stats.catches | 0};
+    if (Array.isArray(d.eggInv)) world.eggInv = d.eggInv.slice(0, 12);
     Brain.restore(d.brain);
   } catch (e) { return false; }
   return true;
 }
 
 // ============================================================ egg sac
-function layEgg() {
-  const g = makeGenome(); spider.applyGenome(g); Brain.init(); Object.assign(Brain.traits, g.traits);
+function layEgg(genome) {
+  const g = genome || makeGenome(); spider.applyGenome(g); spider.stats = {meals: 0, hunts: 0, catches: 0}; world.exuviae = []; Brain.init(); Object.assign(Brain.traits, g.traits);
   let u = 0.5, v = 0.5;
   for (let i = 0; i < 40; i++) { const x = arena.x + u * arena.w, y = arena.y + v * arena.h; if (!inObstacle(x, y, 40)) break; u = rnd(0.2, 0.8); v = rnd(0.2, 0.8); }
   world.egg = {u, v, laid: gameNow()};
@@ -1724,6 +1748,7 @@ function hatch() {
   s.updateBody(0.016); s.placeLegs(); s.enter('PATROL'); s.pause = 2;
   for (let i = 0; i < 9; i++) { const a = rnd(0, TAU), v = rnd(60, 120); world.parts.push({x: p.x, y: p.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: rnd(2.5, 4), t: 'ling', a}); }
   world.parts.push({x: p.x, y: p.y - 26, vy: -14, life: 3, t: `${s.genome.name} hatched!`, big: true});
+  if (typeof Online !== 'undefined') Online.queue(true);
   for (let i = 0; i < 2; i++) {   // a first meal: a couple of flies settle nearby
     const a = rnd(0, TAU), r = rnd(120, 200), fx = clamp(p.x + Math.cos(a) * r, arena.x + 20, arena.x + arena.w - 20), fy = clamp(p.y + Math.sin(a) * r, arena.y + 20, arena.y + arena.h - 20);
     if (!inObstacle(fx, fy, 6)) { const f = new Fly(fx, fy, 'drop'); f.t = rnd(6, 12); world.flies.push(f); }
@@ -1795,7 +1820,7 @@ addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
   if (k === '1') setTool('observe'); else if (k === '2') setTool('prey'); else if (k === '3') setTool('mist'); else if (k === '4') setTool('pet');
-  else if (k === 'v') setStyle(world.style + 1); else if (k === 'c') toggleCPG(); else if (k === 'b') toggleBrain(); else if (k === 'n') toggleNight(); else if (k === 's') toggleSenses(); else if (k === 'm') toggleMute();
+  else if (k === 'o') { Online.isOpen() ? Online.close() : Online.open(); } else if (k === 'v') setStyle(world.style + 1); else if (k === 'c') toggleCPG(); else if (k === 'b') toggleBrain(); else if (k === 'n') toggleNight(); else if (k === 's') toggleSenses(); else if (k === 'm') toggleMute();
 });
 document.addEventListener('pointerdown', () => Snd.init(), {capture: true});
 
@@ -2289,6 +2314,221 @@ function updateHUD(fps) {
   hudEls.fps.textContent = Math.round(fps) + ' fps' + (TIMESCALE > 1 ? ' · ×' + TIMESCALE : '');
 }
 
+// ============================================================ ONLINE (Firebase): accounts · cloud saves · leaderboards · breeding
+// Paste your Firebase web config here (Project settings -> Your apps -> Web app). These values are public
+// identifiers, not secrets: access is protected by the Firestore security rules. Leave null to stay offline.
+const FIREBASE_CONFIG = null;
+const FB_VER = '10.12.2', FB_CDN = `https://www.gstatic.com/firebasejs/${FB_VER}/`;
+const EMULATOR = new URLSearchParams(location.search).has('emulator');   // local testing against the Firebase emulators
+const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function hashStr(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+// Mendelian-ish inheritance: each gene leans on one parent, blends with the midpoint, plus a small mutation
+function breed(a, b, seed) {
+  const r = mulberry32(seed), gauss = () => { let u = 0, v = 0; while (!u) u = r(); while (!v) v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(TAU * v); };
+  const pick = () => r() < 0.5 ? a : b;
+  const mix = (k, sd, lo, hi) => clamp(pick()[k] * 0.5 + (a[k] + b[k]) * 0.25 + gauss() * sd, lo, hi);
+  const morphP = pick(), syl = n => n.toLowerCase().replace(/[^a-z]/g, '');
+  let name = syl(pick().name).slice(0, 2 + (r() * 2 | 0)) + syl(pick().name).slice(-(2 + (r() * 2 | 0)));
+  name = (name[0] || 'x').toUpperCase() + name.slice(1);
+  const trait = k => clamp(((a.traits || {})[k] + (b.traits || {})[k]) / 2 + gauss() * 0.08, 0.1, 0.9);
+  return {gen: Math.max(a.gen || 1, b.gen || 1) + 1, parents: [a.name, b.name], name, sex: r() < 0.5 ? 'female' : 'male',
+    morph: morphP.morph, hue: morphP.hue + gauss() * 3, sat: clamp(morphP.sat + gauss() * 0.02, 0.03, 0.6), lit: clamp(morphP.lit + gauss() * 0.01, 0.12, 0.32),
+    contrast: mix('contrast', 0.05, 0.7, 1.35), size: mix('size', 0.02, 0.88, 1.14), leg: mix('leg', 0.02, 0.9, 1.12), eye: mix('eye', 0.03, 0.85, 1.2),
+    abd: mix('abd', 0.03, 0.85, 1.18), speed: mix('speed', 0.02, 0.88, 1.12), chevrons: r() < 0.08 ? 3 + (r() * 3 | 0) : pick().chevrons,
+    traits: {bold: trait('bold'), curious: trait('curious'), active: trait('active'), affection: trait('affection')}};
+}
+var Online = {   // var: the save() hooks check for it before this point runs
+  configured: !!FIREBASE_CONFIG || EMULATOR, ready: false, fb: null, user: null, name: '', status: 'offline',
+  dirty: false, force: false, lastPush: 0, tab: 'board', unsub: [], incoming: [], outgoing: [], msg: '',
+  async boot() {
+    if (!this.configured) return;
+    try {
+      const [app, auth, fs] = await Promise.all([import(FB_CDN + 'firebase-app.js'), import(FB_CDN + 'firebase-auth.js'), import(FB_CDN + 'firebase-firestore.js')]);
+      const cfg = EMULATOR ? {apiKey: 'demo-key', authDomain: 'localhost', projectId: 'demo-arachni'} : FIREBASE_CONFIG;
+      const a = app.initializeApp(cfg), au = auth.getAuth(a), db = fs.getFirestore(a);
+      if (EMULATOR) { auth.connectAuthEmulator(au, 'http://127.0.0.1:9099', {disableWarnings: true}); fs.connectFirestoreEmulator(db, '127.0.0.1', 8080); }
+      this.fb = {auth, fs, au, db}; this.ready = true; this.status = 'signed out';
+      auth.onAuthStateChanged(au, u => this.onUser(u));
+    } catch (e) { this.status = 'unavailable'; this.msg = 'Could not load Firebase (' + e.message + ')'; }
+    this.render();
+  },
+  // ---------- auth
+  async signUp(name, email, pass) {
+    name = (name || '').trim();
+    if (name.length < 2 || name.length > 20) return this.fail('Pick a player name of 2–20 characters.');
+    try { const {auth, au} = this.fb; this.pendingName = name; await auth.createUserWithEmailAndPassword(au, email, pass); } catch (e) { this.fail(this.niceErr(e)); }
+  },
+  async signIn(email, pass) { try { const {auth, au} = this.fb; await auth.signInWithEmailAndPassword(au, email, pass); } catch (e) { this.fail(this.niceErr(e)); } },
+  async google() { try { const {auth, au} = this.fb; await auth.signInWithPopup(au, new auth.GoogleAuthProvider()); } catch (e) { this.fail(this.niceErr(e)); } },
+  async signOut() { await this.push(true); this.fb.auth.signOut(this.fb.au); },
+  niceErr(e) {
+    const c = (e && e.code) || '';
+    return ({'auth/invalid-email': 'That email address looks wrong.', 'auth/weak-password': 'Password needs at least 6 characters.', 'auth/email-already-in-use': 'An account already uses that email. Sign in instead.',
+      'auth/invalid-credential': 'Email or password is wrong.', 'auth/wrong-password': 'Email or password is wrong.', 'auth/user-not-found': 'No account with that email.',
+      'auth/popup-closed-by-user': 'Google sign-in was closed.', 'auth/unauthorized-domain': 'This site is not an authorised domain in Firebase Authentication settings.',
+      'auth/operation-not-allowed': 'That sign-in method is not enabled in Firebase Authentication.'})[c] || (e && e.message) || String(e);
+  },
+  fail(m) { this.msg = m; this.render(); },
+  async onUser(u) {
+    this.unsub.forEach(f => f()); this.unsub = []; this.user = u; this.msg = '';
+    if (!u) { this.status = 'signed out'; this.name = ''; this.render(); return; }
+    const {fs, db} = this.fb;
+    try {
+      const uref = fs.doc(db, 'users', u.uid), us = await fs.getDoc(uref);
+      if (us.exists()) this.name = us.data().name;
+      else { this.name = (this.pendingName || u.displayName || (u.email || 'player').split('@')[0]).slice(0, 20); await fs.setDoc(uref, {name: this.name, created: fs.serverTimestamp()}); }
+      this.status = 'signed in';
+      await this.syncOnLogin();
+      this.listen();
+    } catch (e) { this.fail('Sync failed: ' + this.niceErr(e)); }
+    this.render();
+  },
+  // ---------- cloud saves
+  async syncOnLogin() {
+    const {fs, db} = this.fb, ref = fs.doc(db, 'saves', this.user.uid), snap = await fs.getDoc(ref);
+    if (!snap.exists()) { await this.push(true); return; }
+    let cloud; try { cloud = JSON.parse(snap.data().json); } catch (e) { await this.push(true); return; }
+    const local = saveData(), same = cloud.genome && local.genome && cloud.genome.name === local.genome.name && cloud.bornAt === local.bornAt;
+    let useCloud;
+    if (same) useCloud = (cloud.savedAt || 0) > (local.savedAt || 0) + 1000;
+    else {
+      const desc = d => `${d.genome ? d.genome.name : '?'} (${d.egg ? 'egg' : STAGES[clamp(d.stage | 0, 0, ADULT)].name})`;
+      useCloud = world.egg && !(local.stats && local.stats.meals)   // a brand-new egg on this device: just take the cloud spider
+        || confirm(`Your account has ${desc(cloud)} saved in the cloud.\n\nOK = load it on this device.\nCancel = keep ${desc(local)} here and replace the cloud copy.`);
+    }
+    if (useCloud) { suppressSave = true; localStorage.setItem(SAVE_KEY, JSON.stringify(cloud)); location.reload(); return; }
+    await this.push(true);
+  },
+  queue(force) { this.dirty = true; if (force) this.force = true; },
+  tick() { if (this.user && this.dirty && (this.force || performance.now() - this.lastPush > 30000)) this.push(false); },
+  summary() {
+    const s = spider, g = s.genome, d = {owner: this.user.uid, ownerName: this.name, name: g.name, sex: g.sex, morph: g.morph, gen: g.gen || 1, parents: g.parents || null,
+      stage: world.egg ? -1 : s.stage, adult: !world.egg && s.stage === ADULT, genome: g, stats: s.stats, updated: this.fb.fs.serverTimestamp()};
+    if (!world.egg) d.bornAt = s.bornAt;   // eggs are left out of the "elders" board
+    return d;
+  },
+  async push(force) {
+    if (!this.user || this.pushing) return; this.pushing = true; this.dirty = false; this.force = false; this.lastPush = performance.now();
+    try {
+      const {fs, db} = this.fb, uid = this.user.uid;
+      await Promise.all([fs.setDoc(fs.doc(db, 'saves', uid), {json: JSON.stringify(saveData()), at: fs.serverTimestamp()}), fs.setDoc(fs.doc(db, 'spiders', uid), this.summary())]);
+      this.synced = Date.now();
+    } catch (e) { this.dirty = true; this.msg = 'Cloud save failed: ' + this.niceErr(e); }
+    this.pushing = false; if (this.isOpen()) this.render();
+  },
+  // ---------- courtship & eggs
+  listen() {
+    const {fs, db} = this.fb, uid = this.user.uid, col = fs.collection(db, 'matings');
+    this.unsub.push(fs.onSnapshot(fs.query(col, fs.where('to', '==', uid)), q => { this.incoming = q.docs.map(d => ({id: d.id, ...d.data()})); this.claimEggs(); this.render(); }, () => {}));
+    this.unsub.push(fs.onSnapshot(fs.query(col, fs.where('from', '==', uid)), q => { this.outgoing = q.docs.map(d => ({id: d.id, ...d.data()})); this.claimEggs(); this.render(); }, () => {}));
+  },
+  async court(other) {
+    const s = spider, g = s.genome;
+    if (world.egg || s.stage !== ADULT) return this.fail('Your spider must be a mature adult to court.');
+    if (!other.adult || other.sex === g.sex) return this.fail('Courtship needs a mature adult of the opposite sex.');
+    if (this.outgoing.some(m => m.to === other.owner && m.status === 'pending')) return this.fail('You already have a pending request with them.');
+    const {fs, db} = this.fb;
+    await fs.addDoc(fs.collection(db, 'matings'), {from: this.user.uid, to: other.owner, fromName: this.name, toName: other.ownerName,
+      fromSpider: {name: g.name, genome: g}, toSpider: {name: other.name, genome: other.genome}, status: 'pending', claimed: {}, created: fs.serverTimestamp()});
+    this.msg = `Courtship request sent to ${other.ownerName}'s ${other.name}.`; this.tab = 'court'; this.render();
+  },
+  async answer(id, ok) {
+    const {fs, db} = this.fb, m = this.incoming.find(x => x.id === id); if (!m) return;
+    if (ok && (world.egg || spider.stage !== ADULT || spider.genome.sex === m.fromSpider.genome.sex)) return this.fail('Your spider must be a mature adult of the opposite sex to accept.');
+    await fs.updateDoc(fs.doc(db, 'matings', id), ok ? {status: 'accepted', toSpider: {name: spider.genome.name, genome: spider.genome}} : {status: 'declined'});
+  },
+  claimEggs() {   // each partner gets their own sibling egg sac from an accepted courtship
+    const uid = this.user && this.user.uid; if (!uid) return;
+    for (const m of [...this.incoming, ...this.outgoing]) {
+      if (m.status !== 'accepted' || (m.claimed && m.claimed[uid]) || world.eggInv.some(e => e.mating === m.id)) continue;
+      const genome = breed(m.fromSpider.genome, m.toSpider.genome, hashStr(m.id + uid));
+      world.eggInv.push({mating: m.id, genome, partner: m.from === uid ? m.toName : m.fromName, at: Date.now()});
+      world.parts.push({x: spider.pos.x, y: spider.pos.y - 40, vy: -12, life: 3, t: 'New egg sac from courtship!', big: true});
+      Snd.stageUp(); save(); this.queue(true);
+      const {fs, db} = this.fb; fs.updateDoc(fs.doc(db, 'matings', m.id), {['claimed.' + uid]: true}).catch(() => {});
+    }
+  },
+  layFromInventory(i) {
+    const e = world.eggInv[i]; if (!e) return;
+    if (!confirm(`Lay ${e.genome.name}'s egg sac? Your current spider ${spider.genome.name} will be replaced.`)) return;
+    world.eggInv.splice(i, 1); layEgg(e.genome); this.queue(true); this.close();
+  },
+  // ---------- UI
+  isOpen() { return $('online').classList.contains('open'); },
+  open() { $('online').classList.add('open'); this.render(); if (this.user && (this.tab === 'board' || this.tab === 'spiders')) this.loadLists(); },
+  close() { $('online').classList.remove('open'); },
+  async loadLists() {
+    if (!this.user) return; const {fs, db} = this.fb, col = fs.collection(db, 'spiders');
+    try {
+      const [old, hunt, recent] = await Promise.all([
+        fs.getDocs(fs.query(col, fs.orderBy('bornAt', 'asc'), fs.limit(10))),
+        fs.getDocs(fs.query(col, fs.orderBy('stats.catches', 'desc'), fs.limit(10))),
+        fs.getDocs(fs.query(col, fs.orderBy('updated', 'desc'), fs.limit(25)))]);
+      const map = q => q.docs.map(d => d.data());
+      this.lists = {old: map(old), hunt: map(hunt), recent: map(recent)};
+    } catch (e) { this.msg = 'Could not load lists: ' + this.niceErr(e); }
+    this.render();
+  },
+  swatch(g) { return g ? hsl2hex(g.hue, g.sat, Math.min(0.6, g.lit * 2.2)) : '#555'; },
+  spiderLine(d) {
+    const st = d.stage < 0 ? 'egg sac' : STAGES[clamp(d.stage | 0, 0, ADULT)].name, sym = d.sex === 'male' ? '♂' : '♀';
+    const age = d.bornAt ? fmtDur(gameNow() - d.bornAt) : '—';
+    return `<span class="sw" style="background:${esc(this.swatch(d.genome))}"></span><span class="grow"><b>${esc(d.name)}</b> ${sym} · ${esc(st)}<br><span class="muted">by ${esc(d.ownerName)} · gen ${esc(d.gen || 1)} · age ${esc(age)} · ${esc((d.stats || {}).catches || 0)} catches</span></span>`;
+  },
+  render() {
+    const b = $('onbody'); if (!b) return;
+    $('onlineb').innerHTML = '<kbd>O</kbd>' + (this.user ? esc(this.name) : 'Online') + (this.incoming.some(m => m.status === 'pending') ? ' •' : '');
+    if (!this.isOpen()) return;
+    let h = '';
+    if (!this.configured) {
+      h = `<p>Online play (accounts, cloud saves, leaderboards and breeding) needs a Firebase project.</p><p class="muted">Paste your web app config into <code>FIREBASE_CONFIG</code> near the bottom of <code>index.html</code>, then reload.</p>`;
+    } else if (!this.ready) h = `<p class="muted">${this.status === 'unavailable' ? 'Firebase could not be loaded. Check your connection.' : 'Connecting…'}</p>`;
+    else if (!this.user) {
+      h = `<p class="muted">Sign in to keep your spider in the cloud, climb the leaderboards and breed with other players' spiders.</p>
+        <input id="on_name" placeholder="Player name (for new accounts)" maxlength="20" autocomplete="nickname">
+        <input id="on_email" type="email" placeholder="Email" autocomplete="email">
+        <input id="on_pass" type="password" placeholder="Password (6+ characters)" autocomplete="current-password">
+        <div class="row2"><button id="on_in">Sign in</button><button id="on_up">Create account</button><button id="on_g">Continue with Google</button></div>`;
+    } else {
+      const pend = this.incoming.filter(m => m.status === 'pending').length;
+      h = `<div class="row2" style="justify-content:space-between;align-items:center"><span>Signed in as <b>${esc(this.name)}</b> <span class="muted">· ${this.synced ? 'saved ' + fmtDur(Date.now() - this.synced) + ' ago' : 'syncing…'}</span></span><button id="on_out">Sign out</button></div>
+        <div class="tabs">${[['board', 'Leaderboards'], ['spiders', 'Spiders'], ['court', 'Courtship' + (pend ? ' (' + pend + ')' : '')], ['eggs', 'Eggs (' + world.eggInv.length + ')']].map(([k, l]) => `<button data-tab="${k}" class="${this.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+      const L = this.lists;
+      if (this.tab === 'board') {
+        const tbl = (title, rows, val) => `<p class="muted" style="margin:10px 0 2px">${title}</p><table>${rows.map((d, i) => `<tr><td>${i + 1}</td><td><b>${esc(d.name)}</b> <span class="muted">${esc(d.ownerName)}</span></td><td style="text-align:right">${esc(val(d))}</td></tr>`).join('') || '<tr><td class="muted">No spiders yet</td></tr>'}</table>`;
+        h += L ? tbl('ELDERS · oldest living', L.old, d => fmtDur(gameNow() - d.bornAt)) + tbl('TOP HUNTERS · catches', L.hunt, d => (d.stats || {}).catches || 0) : '<p class="muted">Loading…</p>';
+      } else if (this.tab === 'spiders') {
+        const me = spider.genome, canCourt = !world.egg && spider.stage === ADULT;
+        h += `<p class="muted">Recently active spiders. Mature adults of the opposite sex can be courted${canCourt ? '' : ' once yours is a mature adult'}.</p>`;
+        h += L ? L.recent.filter(d => d.owner !== this.user.uid).map((d, i) => `<div class="card">${this.spiderLine(d)}${canCourt && d.adult && d.sex !== me.sex ? `<button data-court="${i}">Court</button>` : ''}</div>`).join('') || '<p class="muted">No other players yet. Invite a friend!</p>' : '<p class="muted">Loading…</p>';
+      } else if (this.tab === 'court') {
+        const inc = this.incoming.filter(m => m.status === 'pending'), out = this.outgoing.slice(-8).reverse();
+        h += `<p class="muted" style="margin-bottom:2px">REQUESTS FOR ${esc(spider.genome.name.toUpperCase())}</p>` + (inc.map(m => `<div class="card"><span class="grow"><b>${esc(m.fromSpider.name)}</b> <span class="muted">from ${esc(m.fromName)}</span></span><button data-acc="${esc(m.id)}">Accept</button><button data-dec="${esc(m.id)}">Decline</button></div>`).join('') || '<p class="muted">None right now.</p>');
+        h += `<p class="muted" style="margin:10px 0 2px">SENT</p>` + (out.map(m => `<div class="card"><span class="grow">${esc(m.fromSpider.name)} → <b>${esc(m.toSpider.name)}</b> <span class="muted">(${esc(m.toName)})</span></span><span class="muted">${esc(m.status)}</span></div>`).join('') || '<p class="muted">Nothing sent.</p>');
+      } else if (this.tab === 'eggs') {
+        h += `<p class="muted">Egg sacs from accepted courtships. Each mixes both parents' genes. Laying one replaces your current spider.</p>` +
+          (world.eggInv.map((e, i) => `<div class="card"><span class="sw" style="background:${esc(this.swatch(e.genome))}"></span><span class="grow"><b>${esc(e.genome.name)}</b> ${e.genome.sex === 'male' ? '♂' : '♀'} · gen ${esc(e.genome.gen)}<br><span class="muted">${esc(e.genome.parents.join(' × '))} · with ${esc(e.partner)} · ${esc(e.genome.morph)}</span></span><button data-lay="${i}">Lay</button></div>`).join('') || '<p class="muted">No eggs yet.</p>');
+      }
+    }
+    h += `<div class="msg">${esc(this.msg)}</div>`;
+    b.innerHTML = h;
+    const on = (id, f) => { const el = $(id); if (el) el.onclick = f; }, val = id => ($(id) || {}).value || '';
+    on('on_in', () => this.signIn(val('on_email'), val('on_pass'))); on('on_up', () => this.signUp(val('on_name'), val('on_email'), val('on_pass')));
+    on('on_g', () => this.google()); on('on_out', () => this.signOut());
+    b.querySelectorAll('[data-tab]').forEach(el => el.onclick = () => { this.tab = el.dataset.tab; this.msg = ''; this.render(); if (this.tab === 'board' || this.tab === 'spiders') this.loadLists(); });
+    const others = this.lists ? this.lists.recent.filter(d => d.owner !== (this.user && this.user.uid)) : [];
+    b.querySelectorAll('[data-court]').forEach(el => el.onclick = () => this.court(others[+el.dataset.court]).catch(e => this.fail(this.niceErr(e))));
+    b.querySelectorAll('[data-acc]').forEach(el => el.onclick = () => this.answer(el.dataset.acc, true).catch(e => this.fail(this.niceErr(e))));
+    b.querySelectorAll('[data-dec]').forEach(el => el.onclick = () => this.answer(el.dataset.dec, false).catch(e => this.fail(this.niceErr(e))));
+    b.querySelectorAll('[data-lay]').forEach(el => el.onclick = () => this.layFromInventory(+el.dataset.lay));
+  },
+};
+$('onlineb').onclick = () => Online.isOpen() ? Online.close() : Online.open();
+$('onclose').onclick = () => Online.close();
+$('online').addEventListener('keydown', e => e.stopPropagation());   // typing in the form must not trigger game shortcuts
+Online.boot();
+
 try { setStyle(+localStorage.getItem(SAVE_KEY + '.style') || 0); } catch (e) {}   // restore the chosen visual style
 // ============================================================ main loop
 let last = performance.now(), fpsS = 60, hudT = 0, saveT = 0, tipT = 0;
@@ -2302,13 +2542,14 @@ function frame(now) {
   render();
   hudT -= raw; if (hudT <= 0) { hudT = 0.2; updateHUD(fpsS); }
   saveT += raw; if (saveT > 5) { saveT = 0; save(); }
+  Online.tick();
   tipT += raw; const tip = $('tip'); if (tipT > 25 && tip && tip.style.opacity !== '0') tip.style.opacity = '0';
   requestAnimationFrame(frame);
 }
 addEventListener('resize', resize);
 addEventListener('beforeunload', save);
 document.addEventListener('visibilitychange', () => { last = performance.now(); if (document.hidden) save(); });
-window.__AG = {renderOnce: () => render(), spider, world, Fly, input, STAGES, Brain, hatch, makeGenome, gameNow, skew: ms => { clockSkew += ms; }, ADULT};
+window.__AG = {Online, breed, saveData, renderOnce: () => render(), spider, world, Fly, input, STAGES, Brain, hatch, makeGenome, gameNow, skew: ms => { clockSkew += ms; }, ADULT};
 requestAnimationFrame(frame);
 })();
 </script>
