@@ -50,7 +50,7 @@ Your spider hatches from an egg sac (hold <b>Pet</b> on it to warm it) and grows
 <b>1 Observe</b> – rest the cursor near your spider to be greeted by its pedipalps; flick it fast and it bolts for cover.<br>
 <b>2 Prey</b> – click to drop a fly. <b>3 Mist</b> – click to spray water droplets.<br>
 <b>4 Pet</b> – press and hold on its body.<br>
-<b>N</b> night · <b>S</b> senses overlay · <b>C</b> CPG network · <b>B</b> brain · <b>M</b> sound. Audio unlocks on first click.</div>
+<b>N</b> night · <b>S</b> senses overlay · <b>V</b> visual style · <b>C</b> CPG network · <b>B</b> brain · <b>M</b> sound. Audio unlocks on first click.</div>
 <div id="tb">
   <button data-tool="observe" class="on"><kbd>1</kbd>Observe</button>
   <button data-tool="prey"><kbd>2</kbd>Prey</button>
@@ -61,6 +61,7 @@ Your spider hatches from an egg sac (hold <b>Pet</b> on it to warm it) and grows
   <button id="senses" class="on"><kbd>S</kbd>Senses</button>
   <button id="cpg" class="on"><kbd>C</kbd>CPG</button>
   <button id="brainb" class="on"><kbd>B</kbd>Brain</button>
+  <button id="stylev"><kbd>V</kbd>Natural</button>
   <button id="mute"><kbd>M</kbd>Sound on</button>
   <button id="reset">New egg</button>
 </div>
@@ -360,7 +361,7 @@ const panOf = x => clamp((x / W) * 2 - 1, -1, 1) * 0.8;
 
 // ============================================================ world
 const world = {
-  time: 0, flies: [], drops: [], exuviae: [], parts: [], egg: null, night: false, senses: true, cpg: true, brain: true, tool: 'observe', spawnT: 4,
+  time: 0, flies: [], drops: [], exuviae: [], parts: [], egg: null, night: false, senses: true, cpg: true, brain: true, style: 0, tool: 'observe', spawnT: 4,
   danger: new Float32Array(GW * GH), yield: new Float32Array(GW * GH),
 };
 const input = {x: -9999, y: -9999, vx: 0, vy: 0, speed: 0, inside: false, down: false, still: 0, lastT: 0, lastMove: 0, petting: false};
@@ -1775,6 +1776,12 @@ const $ = id => document.getElementById(id);
 function setTool(t) { world.tool = t; document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t)); cvs.style.cursor = t === 'pet' ? 'grab' : t === 'observe' ? 'default' : 'crosshair'; }
 document.querySelectorAll('[data-tool]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
 function toggleNight() { world.night = !world.night; $('night').classList.toggle('on', world.night); }
+function setStyle(i) {
+  world.style = ((i % THEMES.length) + THEMES.length) % THEMES.length; notesKey = '';
+  $('stylev').innerHTML = '<kbd>V</kbd>' + (world.style ? THEMES[world.style].name : 'Natural'); $('stylev').classList.toggle('on', world.style > 0);
+  try { localStorage.setItem(SAVE_KEY + '.style', String(world.style)); } catch (e) {}
+}
+$('stylev').onclick = () => setStyle(world.style + 1);
 function toggleCPG() { world.cpg = !world.cpg; $('cpg').classList.toggle('on', world.cpg); }
 $('cpg').onclick = toggleCPG;
 function toggleBrain() { world.brain = !world.brain; $('brainb').classList.toggle('on', world.brain); }
@@ -1788,7 +1795,7 @@ addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
   if (k === '1') setTool('observe'); else if (k === '2') setTool('prey'); else if (k === '3') setTool('mist'); else if (k === '4') setTool('pet');
-  else if (k === 'c') toggleCPG(); else if (k === 'b') toggleBrain(); else if (k === 'n') toggleNight(); else if (k === 's') toggleSenses(); else if (k === 'm') toggleMute();
+  else if (k === 'v') setStyle(world.style + 1); else if (k === 'c') toggleCPG(); else if (k === 'b') toggleBrain(); else if (k === 'n') toggleNight(); else if (k === 's') toggleSenses(); else if (k === 'm') toggleMute();
 });
 document.addEventListener('pointerdown', () => Snd.init(), {capture: true});
 
@@ -2036,7 +2043,173 @@ function drawBrain(c) {
   c.restore();
 }
 
+// ============================================================ SCHEMATIC render style (neon wireframe, lab-notebook look)
+const THEMES = [null,
+  {name: 'Ember',  main: [255, 92, 44],  acc: [255, 178, 48],  joint: '#ffeadb', dim: '#2b130c'},
+  {name: 'Violet', main: [152, 108, 255], acc: [255, 84, 214], joint: '#efe7ff', dim: '#1d1531'},
+  {name: 'Cyan',   main: [58, 140, 255],  acc: [122, 238, 255], joint: '#e3f6ff', dim: '#0e1a2f'},
+  {name: 'Lime',   main: [122, 226, 106], acc: [255, 216, 76],  joint: '#f0ffe8', dim: '#11251a'}];
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const FIELD_NOTES = [
+  'Lycosidae (wolf spiders): eight eyes in three rows; the large posterior median pair faces forward.',
+  'Spiders lack extensor muscles at two leg joints: legs straighten by hemolymph pressure, a hydraulic skeleton.',
+  'Trichobothria are fine hairs that register air currents and substrate vibration.',
+  'Leg segments: coxa · trochanter · femur · patella · tibia · metatarsus · tarsus.',
+  'Alternating tetrapod gait: L1 R2 L3 R4 swing together, then R1 L2 R3 L4.',
+  'Central pattern generators: neural circuits that produce rhythm without rhythmic input.',
+  'Ecdysis: the old exoskeleton splits along the carapace margin; the spider emerges pale and soft.',
+  'Pedipalps touch and taste; in mature males the tip swells into a palpal bulb.',
+  'Cuttlefish "passing cloud": dark chromatophore bands sweep across the body, holding prey still.',
+  'Octopus web-over: arms spread wide and drop over prey like a net.',
+];
+const trailCv = document.createElement('canvas'), tctx = trailCv.getContext('2d', {alpha: false});   // opaque: copying it is a plain blit
+let notesKey = '';
+function drawNotes(c, th) {   // static lab-notebook layer, drawn as a handful of vectors each frame
+  if (W >= 700) {   // lab-notebook text, top-right, clear of the HUD and panels
+    c.fillStyle = th.dim; c.textAlign = 'right'; const x0 = W - 30, lh = 20; let y = 70;
+    c.font = '10px ui-monospace,Menlo,Consolas,monospace'; c.fillText('FIELD NOTES · ARANEAE / LYCOSIDAE · ' + spider.genome.name.toUpperCase(), x0, y - 8); y += 14;
+    c.font = 'italic 13px Georgia,"Times New Roman",serif';
+    for (const line of FIELD_NOTES) { c.fillText(line, x0, y); y += lh; }
+    c.textAlign = 'start';
+  }
+  c.strokeStyle = th.dim; c.lineWidth = 1; c.beginPath();   // arena corner brackets
+  for (const [cx, cy, sx, sy] of [[arena.x, arena.y, 1, 1], [arena.x + arena.w, arena.y, -1, 1], [arena.x, arena.y + arena.h, 1, -1], [arena.x + arena.w, arena.y + arena.h, -1, -1]]) {
+    c.moveTo(cx + sx * 24, cy + .5 * sy); c.lineTo(cx, cy + .5 * sy); c.lineTo(cx, cy + sy * 24);
+  }
+  for (const o of obstacles) { c.moveTo(o.x + o.r, o.y); c.arc(o.x, o.y, o.r, 0, TAU); c.moveTo(o.x - 4, o.y); c.lineTo(o.x + 4, o.y); c.moveTo(o.x, o.y - 4); c.lineTo(o.x, o.y + 4); }
+  c.stroke();
+  c.font = '9px ui-monospace,Menlo,Consolas,monospace';
+  obstacles.forEach((o, i) => c.fillText(`OBST.${i + 1}  r=${Math.round(o.r)}`, o.x + o.r * 0.72 + 4, o.y - o.r * 0.72));
+}
+function segBox(c, ax, ay, bx, by, w) {
+  const dx = bx - ax, dy = by - ay, l = Math.hypot(dx, dy) || 1, ux = dx / l, uy = dy / l, nx = -uy * w / 2, ny = ux * w / 2, e = Math.min(0.8, l * 0.1);
+  ax += ux * e; ay += uy * e; bx -= ux * e; by -= uy * e;
+  c.moveTo(ax + nx, ay + ny); c.lineTo(bx + nx, by + ny); c.lineTo(bx - nx, by - ny); c.lineTo(ax - nx, ay - ny); c.closePath();
+}
+function neon(c, col, a, w) { c.strokeStyle = rgba(col, a * 0.16); c.lineWidth = w + 2.6; c.stroke(); c.strokeStyle = rgba(col, a); c.lineWidth = w; c.stroke(); }
+function drawSchematicSpider(c, th) {
+  const S = spider, sc = S.scale, M = th.main, A = th.acc, vis = 1 - 0.6 * S.camo;   // camouflage = fades out
+  // limbs as chains of segment boxes
+  c.beginPath();
+  for (const L of S.legs) for (let k = 0; k < 7; k++) segBox(c, L.R[k].x, L.R[k].y - L.Z[k], L.R[k + 1].x, L.R[k + 1].y - L.Z[k + 1], (LEG_W[k] * 1.9 + 1.4) * sc + 1);
+  for (const P of S.palps) for (let k = 0; k < 6; k++) segBox(c, P.R[k].x, P.R[k].y - P.Z[k], P.R[k + 1].x, P.R[k + 1].y - P.Z[k + 1], (PALP_W[k] * 1.5 + 1) * sc + 0.8);
+  neon(c, M, 0.85 * vis, 0.9);
+  // dotted spine through every joint
+  c.beginPath();
+  for (const L of [...S.legs, ...S.palps]) for (let k = 0; k < L.n; k++) { const x = L.R[k].x, y = L.R[k].y - L.Z[k]; k ? c.lineTo(x, y) : c.moveTo(x, y); }
+  c.setLineDash([1.2, 2.6]); c.strokeStyle = rgba(A, 0.5 * vis); c.lineWidth = 0.7; c.stroke(); c.setLineDash([]);
+  c.fillStyle = th.joint; c.globalAlpha = vis; c.beginPath();
+  for (const L of S.legs) for (let k = 1; k < 8; k++) { const x = L.R[k].x, y = L.R[k].y - L.Z[k], r = k === 7 ? 1.6 : 1.1; c.moveTo(x + r, y); c.arc(x, y, r, 0, TAU); }
+  c.fill(); c.globalAlpha = 1;
+  // planted feet: small contact squares; swinging feet: accent rings
+  c.beginPath();
+  for (const L of S.legs) { const f = L.R[7]; if (L.planted) { const q = 2.4 * sc + 1.2; c.rect(f.x - q, f.y - q, q * 2, q * 2); } }
+  neon(c, A, 0.5 * vis, 0.7);
+  // body in local frame: nested boxes
+  c.save(); c.translate(S.cx, S.cy - S.zc); c.rotate(S.heading); c.scale(sc, sc);
+  c.beginPath(); c.rect(-12, -10.5, 27, 21); c.rect(12, -4.5, 7, 3.6); c.rect(12, 0.9, 7, 3.6); c.fillStyle = '#000'; c.fill();
+  c.rect(-6, -6.5, 15, 13); neon(c, M, vis, 1.1 / sc);
+  c.fillStyle = rgba(A, 0.14 * vis); c.fillRect(-6, -6.5, 15, 13);
+  c.fillStyle = rgba(A, vis); c.beginPath();
+  for (const [ex, ey, er] of [[12.6, 2, 1.8], [12.6, -2, 1.8], [8.7, 3.3, 1.3], [8.7, -3.3, 1.3], [12, 4.4, .8], [12, -4.4, .8], [6.2, 5.6, .9], [6.2, -5.6, .9]]) { c.moveTo(ex + er, ey); c.arc(ex, ey, er, 0, TAU); }
+  c.fill();
+  c.translate(-12.5, 0); c.rotate(angDiff(S.heading, S.abdW));
+  const bw = (1 + 0.03 * Math.sin(S.bob)) * (0.9 + 0.2 * (1 - S.hunger));
+  c.beginPath(); c.rect(-2.5, -2.5, 3, 5);
+  const segs = [[-3, 9, 15], [-12.5, 9.5, 18], [-22.5, 9, 15], [-31, 7, 9]];
+  for (const [x, w2, h2] of segs) c.rect(x - w2, -h2 / 2 * bw, w2, h2 * bw);
+  c.fillStyle = '#000'; c.fill(); neon(c, M, vis, 1.1 / sc);
+  if (S.display > 0.02) {   // passing-cloud bands as sweeping highlighted boxes
+    const ph = S.cloudPh % 1, x = -3 - ph * 34;
+    c.fillStyle = rgba(A, 0.45 * S.display); c.fillRect(x - 3, -8 * bw, 3, 16 * bw);
+  }
+  c.fillStyle = th.joint; c.beginPath(); for (const [x, w2] of segs) { c.moveTo(x - w2 / 2 + 1, 0); c.arc(x - w2 / 2, 0, 1, 0, TAU); } c.fill();
+  c.restore();
+  if (S.prey) { const k = 22 * sc, px = S.cx + Math.cos(S.heading) * k, py = S.cy - S.zc + Math.sin(S.heading) * k; c.beginPath(); c.rect(px - 3, py - 3, 6, 6); neon(c, A, 0.9, 0.8); }
+}
+function drawSchematicFly(c, f, th) {
+  if (f.caught) return;
+  const sx = f.x, sy = f.y - f.z;
+  c.beginPath();
+  if (f.z > 1) { c.moveTo(f.x, f.y); c.lineTo(sx, sy); c.moveTo(f.x - 3, f.y); c.lineTo(f.x + 3, f.y); }
+  const ca = Math.cos(f.h), sa = Math.sin(f.h), r = 3 * f.sz;
+  c.moveTo(sx + (ca - sa) * r, sy + (sa + ca) * r); c.lineTo(sx + (-ca - sa) * r, sy + (-sa + ca) * r); c.lineTo(sx + (-ca + sa) * r, sy + (-sa - ca) * r); c.lineTo(sx + (ca + sa) * r, sy + (sa - ca) * r); c.closePath();
+  const flap = (f.mode === 'fly' || f.mode === 'drop') ? Math.sin(f.wing) * 0.6 : 0;
+  for (const sd of [-1, 1]) { const a = f.h + PI + sd * (0.6 + flap); c.moveTo(sx, sy); c.lineTo(sx + Math.cos(a) * 7 * f.sz, sy + Math.sin(a) * 7 * f.sz); }
+  neon(c, [235, 240, 255], 0.75, 0.7);
+  if (f.trance > 0.05) { c.beginPath(); c.arc(sx, sy, 7 + 3 * f.trance, 0, TAU); neon(c, THEMES[3].acc === th.acc ? [255, 84, 214] : [190, 120, 255], 0.6 * f.trance, 0.7); }
+}
+function drawSchematicEgg(c, th) {
+  const p = eggPos(), left = world.egg.laid + EGG_MS - gameNow(), t = world.time, k = clamp(1 - left / EGG_MS, 0, 1);
+  c.beginPath();
+  for (let i = 0; i < 3; i++) { const r = 8 + i * 6 + Math.sin(t * 2 + i) * (left < 20000 ? 1.5 : 0.4); c.moveTo(p.x + r, p.y); c.arc(p.x, p.y, r, 0, TAU); }
+  for (let i = 0; i < 12; i++) { const a = i / 12 * TAU + t * 0.2; c.moveTo(p.x + Math.cos(a) * 21, p.y + Math.sin(a) * 21); c.lineTo(p.x + Math.cos(a) * 25, p.y + Math.sin(a) * 25); }
+  neon(c, th.main, 0.85, 0.8);
+  c.beginPath(); c.arc(p.x, p.y, 29, -PI / 2, -PI / 2 + k * TAU); neon(c, th.acc, 0.9, 1);
+  c.fillStyle = rgba(th.main, 0.9); c.textAlign = 'center'; c.font = '10px ui-monospace,Menlo,Consolas,monospace';
+  c.fillText(`OOTHECA · ${spider.genome.name.toUpperCase()} · T-${fmtDur(left)}`, p.x, p.y + 46); c.textAlign = 'start';
+}
+function label(c, th, x, y, dx, dy, text) {
+  c.strokeStyle = rgba(th.main, 0.55); c.lineWidth = 0.7; c.beginPath(); c.moveTo(x, y); c.lineTo(x + dx, y + dy); c.lineTo(x + dx + Math.sign(dx) * 14, y + dy); c.stroke();
+  c.fillStyle = rgba(th.main, 0.95); c.textAlign = dx < 0 ? 'right' : 'left'; c.fillText(text, x + dx + Math.sign(dx) * 17, y + dy + 3); c.textAlign = 'start';
+}
+function renderSchematic() {
+  const c = ctx, th = THEMES[world.style], key = world.style + ':' + cvs.width + 'x' + cvs.height + ':' + spider.genome.name;
+  const t = tctx;
+  if (notesKey !== key) { notesKey = key; trailCv.width = cvs.width; trailCv.height = cvs.height; t.fillStyle = '#000'; t.fillRect(0, 0, trailCv.width, trailCv.height); }
+  // persistence layer (opaque black): creatures leave fading afterimages
+  t.setTransform(1, 0, 0, 1, 0, 0); t.globalCompositeOperation = 'source-over';
+  t.fillStyle = 'rgba(0,0,0,0.17)'; t.fillRect(0, 0, trailCv.width, trailCv.height);
+  t.setTransform(DPR, 0, 0, DPR, 0, 0);
+  t.globalCompositeOperation = 'lighter'; for (const f of world.flies) drawSchematicFly(t, f, th);
+  t.globalCompositeOperation = 'source-over';
+  if (world.egg) drawSchematicEgg(t, th); else drawSchematicSpider(t, th);
+  t.globalCompositeOperation = 'source-over';
+  // crisp layer
+  c.setTransform(1, 0, 0, 1, 0, 0); c.drawImage(trailCv, 0, 0);
+  c.setTransform(DPR, 0, 0, DPR, 0, 0); drawNotes(c, th); c.font = '9px ui-monospace,Menlo,Consolas,monospace';
+  for (const e of world.exuviae) {
+    const fade = 1 - (gameNow() - (e.born || 0)) / EXUVIA_MS; if (fade <= 0) continue;
+    const x = arena.x + e.u * arena.w, y = arena.y + e.v * arena.h; c.beginPath();
+    for (const L of e.legs) for (let k = 0; k < L.length; k++) { const px = x + L[k][0], py = y + L[k][1]; k ? c.lineTo(px, py) : c.moveTo(px, py); }
+    c.setLineDash([2, 3]); c.strokeStyle = rgba(th.main, 0.35 * fade); c.lineWidth = 0.8; c.stroke(); c.setLineDash([]);
+    c.fillStyle = rgba(th.main, 0.5 * fade); c.fillText('EXUVIA', x + 14, y - 14);
+  }
+  c.beginPath(); for (const d of world.drops) { c.moveTo(d.x + d.r, d.y); c.arc(d.x, d.y, d.r, 0, TAU); }
+  c.strokeStyle = rgba(th.acc, 0.8); c.lineWidth = 0.8; c.stroke();
+  if (world.senses && !world.egg) {   // thin vision cones only
+    const S = spider, e = S.headPt(tmpA), h = S.heading, sc = S.scale;
+    c.strokeStyle = rgba(th.main, 0.22); c.lineWidth = 0.7; c.beginPath();
+    for (const [r, a] of [[230 + 170 * sc, 77.5 * PI / 180], [330 + 240 * sc, 22 * PI / 180]]) { c.moveTo(e.x, e.y); c.arc(e.x, e.y, r, h - a, h + a); c.closePath(); }
+    c.stroke();
+    if (S.target && S.tVis) { c.setLineDash([2, 3]); c.strokeStyle = rgba(th.acc, 0.6); c.beginPath(); c.moveTo(e.x, e.y); c.lineTo(S.target.x, S.target.y - S.target.z); c.stroke(); c.setLineDash([]); }
+  }
+  // live telemetry labels
+  if (!world.egg) {
+    const S = spider, X = S.cx, Y = S.cy - S.zc, ep = Brain.episode;
+    label(c, th, X, Y, 46, -58, `${S.genome.name.toUpperCase()} · ${STAGES[S.stage].name.split(' · ')[0].toUpperCase()}`);
+    label(c, th, X, Y, 46, -46, `${S.state}${ep ? ' / ' + TACTICS[ep.tactic].toUpperCase() : ''}`);
+    for (const i of [0, 7]) {
+      const L = S.legs[i], f = L.R[4], y = f.y - L.Z[4], dx = (L.side < 0 ? -1 : 1) * 30;
+      label(c, th, f.x, y, dx, i === 0 ? -22 : 22, `${L.name} φ${L.phase.toFixed(2)} ${L.planted ? 'STANCE' : 'SWING'}`);
+    }
+    c.fillStyle = rgba(th.main, 0.7); c.textAlign = 'center';
+    c.fillText(`CPG ${S.gaitF.toFixed(2)}Hz  R ${S.cpgSync.toFixed(2)}  ·  v ${Math.round(S.speed)}px/s  ·  P(catch) ${Brain.live.active ? Math.round(Brain.live.p * 100) + '%' : '—'}`, W / 2, arena.y + 16); c.textAlign = 'start';
+  }
+  c.textAlign = 'center';
+  for (const p of world.parts) {
+    c.globalAlpha = clamp(p.life, 0, 1);
+    if (p.t === 'ling') { c.strokeStyle = rgba(th.main, 0.9); c.lineWidth = 0.8; c.strokeRect(p.x - 2, p.y - 2, 4, 4); continue; }
+    c.fillStyle = p.t === '♥' ? rgba(th.acc, 1) : rgba(th.main, 1); c.font = p.big ? '12px ui-monospace,Menlo,monospace' : '11px ui-monospace,Menlo,monospace'; c.fillText(p.t, p.x, p.y);
+  }
+  c.globalAlpha = 1; c.textAlign = 'start'; c.font = '10px ui-monospace,Menlo,Consolas,monospace';
+  if (world.cpg) drawCPG(c);
+  if (world.brain) drawBrain(c);
+  if (world.tool === 'pet' && input.inside) { c.strokeStyle = rgba(th.acc, input.petting ? 0.8 : 0.35); c.lineWidth = 1; c.beginPath(); c.arc(input.x, input.y, 12, 0, TAU); c.stroke(); }
+}
+
 function render() {
+  if (world.style) return renderSchematic();
   const c = ctx;
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.drawImage(bg, 0, 0);
@@ -2116,6 +2289,7 @@ function updateHUD(fps) {
   hudEls.fps.textContent = Math.round(fps) + ' fps' + (TIMESCALE > 1 ? ' · ×' + TIMESCALE : '');
 }
 
+try { setStyle(+localStorage.getItem(SAVE_KEY + '.style') || 0); } catch (e) {}   // restore the chosen visual style
 // ============================================================ main loop
 let last = performance.now(), fpsS = 60, hudT = 0, saveT = 0, tipT = 0;
 function frame(now) {
@@ -2134,7 +2308,7 @@ function frame(now) {
 addEventListener('resize', resize);
 addEventListener('beforeunload', save);
 document.addEventListener('visibilitychange', () => { last = performance.now(); if (document.hidden) save(); });
-window.__AG = {spider, world, Fly, input, STAGES, Brain, hatch, makeGenome, gameNow, skew: ms => { clockSkew += ms; }, ADULT};
+window.__AG = {renderOnce: () => render(), spider, world, Fly, input, STAGES, Brain, hatch, makeGenome, gameNow, skew: ms => { clockSkew += ms; }, ADULT};
 requestAnimationFrame(frame);
 })();
 </script>
