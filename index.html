@@ -114,7 +114,7 @@ const STAGES = [
   {name: 'Mature Adult',           scale: 1.05, hours: Infinity, meals: Infinity},
 ];
 const ADULT = STAGES.length - 1;
-const HOUR = 3600e3, EGG_MS = 120e3, EXUVIA_MS = 3 * HOUR, PREMOLT = 0.85, MOLT_SHED = 5, MOLT_END = 14;
+const HOUR = 3600e3, EGG_MS = 20e3, EXUVIA_MS = 3 * HOUR, PREMOLT = 0.85, MOLT_SHED = 5, MOLT_END = 14;
 // ?timescale=3600 runs the life-cycle clock 3600x faster (for previewing growth)
 const TIMESCALE = Math.max(1, +(new URLSearchParams(location.search).get('timescale')) || 1);
 let clockSkew = 0; const gameNow = () => Date.now() + clockSkew;
@@ -296,6 +296,10 @@ const Snd = {
     const len = c.sampleRate | 0, b = c.createBuffer(1, len, c.sampleRate), d = b.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     this.noise = b;
+    // bit-crushed "digital" noise: sample-and-hold at a hopping rate, quantised to 3 bits
+    const db = c.createBuffer(1, len, c.sampleRate), dd = db.getChannelData(0); let hold = 8, v = 0;
+    for (let i = 0; i < len; i++) { if (i % 256 === 0) hold = [3, 6, 12, 24][Math.random() * 4 | 0]; if (i % hold === 0) v = Math.round((Math.random() * 2 - 1) * 3) / 3; dd[i] = v; }
+    this.dnoise = db;
     // continuous wing-buzz voice (AM flutter)
     const o = c.createOscillator(), o2 = c.createOscillator(); o.type = 'sawtooth'; o2.type = 'square';
     o.frequency.value = 182; o2.frequency.value = 189;
@@ -326,17 +330,30 @@ const Snd = {
     g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(gain, t0 + 0.006); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     const p = this.pan(pan || 0); o.connect(g); g.connect(p); p.connect(this.out); o.start(t0); o.stop(t0 + dur + 0.03);
   },
-  step(pan, scale, crouch, speedK) {
+  // digital-noise tick: a short slice of bit-crushed noise + a tiny square blip pitched per leg pair
+  digi(t, pan, gain, dur, rate, hp, blipF) {
+    const c = this.ctx, src = c.createBufferSource(); src.buffer = this.dnoise; src.playbackRate.value = rate;
+    const fl = c.createBiquadFilter(); fl.type = 'highpass'; fl.frequency.value = hp;
+    const g = c.createGain(); g.gain.setValueAtTime(gain, t); g.gain.setValueAtTime(gain, t + dur * 0.35); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    const p = this.pan(pan); src.connect(fl); fl.connect(g); g.connect(p); p.connect(this.out);
+    src.start(t, Math.random() * 0.9, dur + 0.02);
+    if (blipF) {
+      const o = c.createOscillator(), og = c.createGain(); o.type = 'square'; o.frequency.setValueAtTime(blipF, t); o.frequency.setValueAtTime(blipF * 1.5, t + dur * 0.4);
+      og.gain.setValueAtTime(gain * 0.22, t); og.gain.exponentialRampToValueAtTime(0.0001, t + dur * 0.8);
+      o.connect(og); og.connect(p); o.start(t); o.stop(t + dur);
+    }
+  },
+  step(pan, scale, crouch, speedK, idx) {
     if (!this.ok()) return;
     const t = this.ctx.currentTime; if (t - this.lastStep < 0.011) return; this.lastStep = t;
-    const gain = 0.10 * (1 - crouch) * (0.35 + 0.65 * speedK) * (0.55 + 0.45 * scale);
-    if (gain < 0.003) return;
-    const f = clamp(2600 / scale, 1900, 6400) * rnd(0.88, 1.12);
-    this.hit(t, 'bandpass', f, 5, gain, 0.022 + 0.018 * scale, pan);
+    const gain = 0.17 * (1 - 0.85 * crouch) * (0.5 + 0.5 * speedK) * (0.75 + 0.25 * scale);
+    if (gain < 0.004) return;
+    const blip = [660, 880, 1100, 1320][(idx || 0) % 4] * (1.35 - 0.35 * scale);   // each leg pair has its own note
+    this.digi(t, pan, gain, 0.016 + 0.02 * scale, (1.7 - 0.6 * scale) * rnd(0.85, 1.15), clamp(700 / Math.sqrt(scale), 600, 1400), blip);
   },
   tap(pan, scale) {
     if (!this.ok()) return; const t = this.ctx.currentTime;
-    this.hit(t, 'bandpass', clamp(4300 / Math.sqrt(scale), 3000, 7000) * rnd(.92, 1.08), 9, 0.035, 0.016, pan);
+    this.digi(t, pan, 0.06, 0.012, 2.2 * rnd(0.9, 1.1), 2400, 2640 * (1.3 - 0.3 * scale));
   },
   hydraulic(up, pan) {
     if (!this.ok()) return; const t = this.ctx.currentTime;
@@ -1331,7 +1348,7 @@ class Spider {
         this.restWorld(leg, tmpA, this.pos.x + this.vel.x * 0.06, this.pos.y + this.vel.y * 0.06, this.heading);
         leg.foot.x += (tmpA.x - leg.foot.x) * k; leg.foot.y += (tmpA.y - leg.foot.y) * k;
         leg.lift = air ? Math.sin(PI * t / 0.3) * 10 * s : leg.lift * Math.exp(-dt * 20);
-        if (!air && !leg.planted) { leg.flash = 1; if (leg.idx === 0) Snd.step(leg.side * 0.4, s, 0, 1); }
+        if (!air && !leg.planted) { leg.flash = 1; Snd.step(leg.side * 0.4, s, 0, 1, leg.idx); }
         leg.planted = !air;
       }
       return;
@@ -1363,7 +1380,7 @@ class Spider {
         leg.tgt.x += (tmpB.x - leg.tgt.x) * ka; leg.tgt.y += (tmpB.y - leg.tgt.y) * ka;
         if (leg.phase < STANCE) {   // oscillator crossed 2PI: touchdown
           leg.planted = true; leg.foot.x = leg.tgt.x; leg.foot.y = leg.tgt.y; leg.lift = 0; leg.flash = 1;
-          Snd.step(clamp(leg.side * 0.35 + panOf(leg.foot.x) * 0.6, -1, 1), s, this.crouch, speedK);
+          Snd.step(clamp(leg.side * 0.35 + panOf(leg.foot.x) * 0.6, -1, 1), s, this.crouch, speedK, leg.idx);
         } else {
           const t = clamp((leg.phase - STANCE) / (1 - STANCE), 0, 1), q = quintic(t);
           leg.foot.x = leg.sw.x + (leg.tgt.x - leg.sw.x) * q; leg.foot.y = leg.sw.y + (leg.tgt.y - leg.sw.y) * q;
@@ -1761,12 +1778,12 @@ function updateEgg(dt) {
     e.laid -= dt * 1000; if (Math.random() < dt * 2) world.parts.push({x: p.x + rnd(-8, 8), y: p.y - 20, vy: -20, life: 1.2, t: '♥'});
   }
   const left = e.laid + EGG_MS - gameNow();
-  if (left < 15000 && Math.random() < dt * 3) Snd.crackle();
+  if (left < EGG_MS * 0.35 && Math.random() < dt * 3) Snd.crackle();
   if (left <= 0) hatch();
 }
 function drawEgg(c) {
   const e = world.egg, p = eggPos(), left = e.laid + EGG_MS - gameNow(), t = world.time;
-  const wob = left < 20000 ? Math.sin(t * 22) * 0.09 * (1 - left / 20000) : Math.sin(t * 1.3) * 0.015;
+  const wobW = EGG_MS * 0.5, wob = left < wobW ? Math.sin(t * 22) * 0.09 * (1 - left / wobW) : Math.sin(t * 1.3) * 0.015;
   c.fillStyle = 'rgba(0,0,0,0.35)'; c.beginPath(); c.ellipse(p.x + 4, p.y + 7, 17, 9, 0, 0, TAU); c.fill();
   c.save(); c.translate(p.x, p.y); c.rotate(wob);
   c.fillStyle = '#cfc6b4'; c.beginPath(); c.arc(0, 0, 15, 0, TAU); c.fill();
@@ -1777,7 +1794,7 @@ function drawEgg(c) {
   for (let i = 0; i < 16; i++) { const a = hash(i * 1.7) * TAU, r = 6 + hash(i * 5.3) * 9; c.moveTo(Math.cos(a) * r, Math.sin(a) * r); c.quadraticCurveTo(0, 0, Math.cos(a + 2.2) * 14, Math.sin(a + 2.2) * 14); }
   c.stroke();
   c.strokeStyle = 'rgba(160,150,130,0.8)'; c.lineWidth = 1; c.beginPath(); c.arc(0, 0, 15, 0, TAU); c.stroke();
-  if (left < 15000) { c.strokeStyle = 'rgba(60,45,30,0.8)'; c.beginPath(); const k = 1 - left / 15000; c.moveTo(-8 * k, -10); c.lineTo(-2, -4); c.lineTo(3 * k, -9); c.lineTo(7 * k, -2); c.stroke(); }
+  if (left < EGG_MS * 0.35) { c.strokeStyle = 'rgba(60,45,30,0.8)'; c.beginPath(); const k = 1 - left / (EGG_MS * 0.35); c.moveTo(-8 * k, -10); c.lineTo(-2, -4); c.lineTo(3 * k, -9); c.lineTo(7 * k, -2); c.stroke(); }
   c.fillStyle = 'rgba(255,255,255,0.6)'; c.beginPath(); c.arc(-5, -6, 3, 0, TAU); c.fill();
   c.restore();
   c.fillStyle = '#9fb3c8'; c.textAlign = 'center'; c.fillText(`${spider.genome.name}'s egg sac · ${fmtDur(left)}`, p.x, p.y + 30); c.textAlign = 'start';
@@ -2167,7 +2184,7 @@ function drawSchematicFly(c, f, th) {
 function drawSchematicEgg(c, th) {
   const p = eggPos(), left = world.egg.laid + EGG_MS - gameNow(), t = world.time, k = clamp(1 - left / EGG_MS, 0, 1);
   c.beginPath();
-  for (let i = 0; i < 3; i++) { const r = 8 + i * 6 + Math.sin(t * 2 + i) * (left < 20000 ? 1.5 : 0.4); c.moveTo(p.x + r, p.y); c.arc(p.x, p.y, r, 0, TAU); }
+  for (let i = 0; i < 3; i++) { const r = 8 + i * 6 + Math.sin(t * 2 + i) * (left < EGG_MS * 0.5 ? 1.5 : 0.4); c.moveTo(p.x + r, p.y); c.arc(p.x, p.y, r, 0, TAU); }
   for (let i = 0; i < 12; i++) { const a = i / 12 * TAU + t * 0.2; c.moveTo(p.x + Math.cos(a) * 21, p.y + Math.sin(a) * 21); c.lineTo(p.x + Math.cos(a) * 25, p.y + Math.sin(a) * 25); }
   neon(c, th.main, 0.85, 0.8);
   c.beginPath(); c.arc(p.x, p.y, 29, -PI / 2, -PI / 2 + k * TAU); neon(c, th.acc, 0.9, 1);
@@ -2549,7 +2566,7 @@ function frame(now) {
 addEventListener('resize', resize);
 addEventListener('beforeunload', save);
 document.addEventListener('visibilitychange', () => { last = performance.now(); if (document.hidden) save(); });
-window.__AG = {Online, breed, saveData, renderOnce: () => render(), spider, world, Fly, input, STAGES, Brain, hatch, makeGenome, gameNow, skew: ms => { clockSkew += ms; }, ADULT};
+window.__AG = {Snd, Online, breed, saveData, renderOnce: () => render(), spider, world, Fly, input, STAGES, Brain, hatch, makeGenome, gameNow, skew: ms => { clockSkew += ms; }, ADULT};
 requestAnimationFrame(frame);
 })();
 </script>
