@@ -106,11 +106,11 @@ function fmtDur(ms) { ms = Math.max(0, ms); const m = Math.floor(ms / 60000), h 
 const STATE_PARAMS = {
   PATROL:          {v:70,  st:.38, ht:.24, cr:0,   palp:'rest'},
   INVESTIGATE:     {v:46,  st:.42, ht:.22, cr:.15, palp:'tap'},
-  STALK:           {v:24,  st:.55, ht:.34, cr:.72, palp:'rest'},
+  STALK:           {v:32,  st:.55, ht:.34, cr:.72, palp:'rest'},
   AMBUSH_COVER:    {v:85,  st:.35, ht:.24, cr:.5,  palp:'tuck'},
   FLANK_INTERCEPT: {v:165, st:.22, ht:.14, cr:.2,  palp:'tuck'},
   LUNGE:           {v:620, st:.07, ht:.05, cr:0,   palp:'tuck'},
-  MESMERIZE:       {v:16,  st:.6,  ht:.3,  cr:.05, palp:'wave'},   // cuttlefish passing-cloud display
+  MESMERIZE:       {v:30,  st:.6,  ht:.3,  cr:.05, palp:'wave'},   // cuttlefish passing-cloud display
   ENVELOP:         {v:470, st:.08, ht:.06, cr:0,   palp:'tuck'},   // octopus web-over pounce
   EVADE:           {v:290, st:.12, ht:.09, cr:.25, palp:'tuck'},
   FEED:            {v:0,   st:.4,  ht:.3,  cr:.35, palp:'feed'},
@@ -396,7 +396,7 @@ class Fly {
     switch (this.mode) {
       case 'drop':
         this.z -= dt * 70; this.vx *= .9; this.vy *= .9;
-        if (this.z <= 0) { this.z = 0; this.mode = 'land'; this.t = rnd(3, 7); }
+        if (this.z <= 0) { this.z = 0; this.mode = 'land'; this.t = rnd(3, 7); world.thud = {x: this.x, y: this.y, t: world.time}; }   // landing impact: a substrate vibration
         break;
       case 'fly': {
         this.h += (Math.sin(this.bt * 1.7) * 0.6 + rnd(-1, 1)) * dt * 3.4;
@@ -416,7 +416,7 @@ class Fly {
         this.vx *= Math.exp(-dt * 8); this.vy *= Math.exp(-dt * 8);
         if (this.t < 0 && this.trance > 0.3) this.t = 0.8;   // entranced: stays put
         if (this.t < 0) {
-          if (Math.random() < 0.38) { this.mode = 'fly'; this.t = rnd(2, 4.5); this.zt = rnd(20, 36); }
+          if (Math.random() < (this.byUser ? 0.12 : 0.38)) { this.mode = 'fly'; this.t = rnd(2, 4.5); this.zt = rnd(20, 36); }   // dropped feeders are calmer
           else { this.mode = 'walk'; this.t = rnd(0.6, 1.8); this.h = rnd(0, TAU); }
         }
         break;
@@ -577,7 +577,7 @@ const Brain = {
   },
   accuracy() { return this.recent.length ? this.recent.reduce((a, b) => a + b, 0) / this.recent.length : 0; },
   // ---------- tactics
-  context(T) { return T.z > 12 || T.mode === 'fly' ? 2 : T.speed > 12 ? 1 : 0; },
+  context(T) { return T.mode === 'drop' ? 0 : T.z > 12 || T.mode === 'fly' ? 2 : T.speed > 12 ? 1 : 0; },   // a falling dropped fly is about to be grounded prey
   chooseTactic(ctx) {
     const bold = this.traits.bold; let best = 0, bs = -1;
     for (let t = 0; t < TACTICS.length; t++) {
@@ -650,7 +650,7 @@ class Spider {
     this.pos = {x: 0, y: 0}; this.vel = {x: 0, y: 0}; this.heading = -PI / 2; this.hv = {v: 0}; this.angVel = 0; this.speed = 0;
     this.stage = 0; this.scale = STAGES[0].scale; this.genome = null; this.bornAt = 0; this.stageStart = 0; this.meals = 0;
     this.premolt = false; this.premoltK = 0; this.legX = 1;
-    this.camo = 0; this.display = 0; this.armWave = 0; this.splay = 1; this.cageT = 0; this.hopZ = 0; this.belief = 0; this.cloudPh = 0; this.cloudRate = 1; this.envPt = {x: 0, y: 0};
+    this.camo = 0; this.display = 0; this.armWave = 0; this.splay = 1; this.cageT = 0; this.hopZ = 0; this.softT = 0; this.belief = 0; this.cloudPh = 0; this.cloudRate = 1; this.envPt = {x: 0, y: 0};
     this.hunger = 0.45; this.thirst = 0.3; this.energy = 0.9; this.bond = 0.2; this.age = 0; this.fresh = 0;
     this.crouch = 0; this.crouchT = 0; this.crouchV = {v: 0}; this.tuck = 0;
     this.fang = 0; this.fangT = 0; this.abdW = this.heading; this.abdV = 0; this.bob = rnd(0, 9);
@@ -731,7 +731,8 @@ class Spider {
     if (sleeping && world.night) Brain.nudge('active', dt * 0.0012);
     for (const k in Brain.drift) Brain.drift[k] *= Math.exp(-dt / 4);
     this.bond = clamp(this.bond - dt / 900, 0, 1);
-    this.fresh = Math.max(0, this.fresh - dt / 1200);   // new exoskeleton hardens over ~20 minutes
+    this.fresh = Math.max(0, this.fresh - dt / 1200);   // pale new exoskeleton darkens over ~20 minutes
+    this.softT = Math.max(0, this.softT - dt);           // ...but fangs harden enough to hunt much sooner
     this.premoltK += ((this.premolt ? 1 : 0) - this.premoltK) * Math.min(1, dt * 0.5);
     this.lungeCD -= dt; this.settleCD -= dt;
   }
@@ -758,6 +759,8 @@ class Spider {
       const vibrating = (f.mode === 'walk' && d < vibR) || ((f.mode === 'fly' || f.mode === 'drop') && d < vibR * 0.75);
       if (vibrating && (!this.stim || d < this.stim.d)) this.stim = {x: f.x + rnd(-12, 12), y: f.y + rnd(-12, 12), t: now, d};
     }
+    const th = world.thud;   // trichobothria pick up the thump of prey hitting the ground from much further away
+    if (th && now - th.t < 0.3 && !sleeping && Math.hypot(th.x - this.pos.x, th.y - this.pos.y) < vibR * 2.5) this.stim = {x: th.x, y: th.y, t: now, d: 0};
     const wasVis = this.tVis;
     if (best) {
       this.target = best; this.tVis = true; this.tFocus = bestFocus; this.lastSeen = now;
@@ -892,14 +895,14 @@ class Spider {
     // ---- utilities
     const T = this.target;
     const drop = this.nearestDrop();
-    const hungry = this.hunger > 0.16 && !this.premolt && this.fresh < 0.6;   // fasts before a molt & while soft
+    const hungry = this.hunger > 0.16 && !this.premolt && this.softT <= 0;   // fasts before a molt & while fangs are still soft
     const uHunt = T && hungry && (this.tVis || world.time - this.lastSeen < 0.6) ? 0.3 + this.hunger : 0;
     const uDrink = drop && this.thirst > 0.28 ? this.thirst * 1.3 : 0;
     const uInv = (this.stim && hungry ? 0.45 : (this.lkp && hungry ? 0.4 + this.hunger * 0.3 : (T && this.tVis && hungry ? 0.5 : 0))) * (0.6 + 0.8 * Brain.traits.curious);
     const uPatrol = 0.25;
     const m = Math.max(uHunt, uDrink, uInv, uPatrol);
     if (m === uHunt && uHunt > 0 && (this.tFocus || this.isHunting())) {
-      const hp = this.headPt(tmpB), d = Math.hypot(T.x - hp.x, T.y - hp.y), fly = T.z > 12, lr = this.lungeR(), now = world.time;
+      const hp = this.headPt(tmpB), d = Math.hypot(T.x - hp.x, T.y - hp.y), fly = T.z > 12 && T.mode !== 'drop', lr = this.lungeR(), now = world.time;
       // 1. learned tactics: one episode per target, tactic picked by Thompson sampling over past outcomes
       let ep = Brain.episode;
       if (!ep || ep.target !== T) {
@@ -1024,7 +1027,9 @@ class Spider {
         const stop = lr * 0.72;
         if (this.tVis) {
           if (d > stop) setGoal(T.x - Math.cos(a) * stop, T.y - Math.sin(a) * stop);
-          v *= clamp((d - stop) / 90, 0.3, 1);
+          // run in while still outside the prey's alarm range, then creep the last stretch
+          const runK = clamp((d - lr * 1.7) / (lr * 1.5), 0, 1);
+          v = lerp(v * clamp((d - stop) / 40, 0.6, 1), 80, runK);   // steady creep: stays below the prey's startle speed this.crouchT = lerp(STATE_PARAMS.STALK.cr * (1.2 - 0.4 * Brain.traits.bold), 0.15, runK);
           setFace(T.x, T.y); this.faceAlways = true;
         } else if (this.lkp) { const g = this.ghostPos(tmpC); setGoal(g.x, g.y); setFace(g.x, g.y); }
         this.fangT = d < lr * 1.3 ? 0.35 : 0.1;
@@ -1140,7 +1145,7 @@ class Spider {
         this.moltT += dt; const t = this.moltT;
         this.sub = (t < MOLT_SHED ? 'splitting ' : 'emerging ') + (t / MOLT_END * 100 | 0) + '%';
         if (Math.random() < dt * (t < MOLT_SHED ? 14 : 6)) Snd.crackle();
-        if (t > MOLT_SHED && !this.moltDone) { this.moltDone = true; this.makeExuvia(); this.fresh = 1; }
+        if (t > MOLT_SHED && !this.moltDone) { this.moltDone = true; this.makeExuvia(); this.fresh = 1; this.softT = 60 + MOLT_END - MOLT_SHED; }
         if (t > MOLT_SHED) {
           const ns = STAGES[Math.min(ADULT, this.stage + 1)].scale * (this.genome ? this.genome.size : 1);
           this.scale = lerp(this.moltFrom, ns, smooth01((t - MOLT_SHED) / (MOLT_END - MOLT_SHED)));
@@ -1714,10 +1719,14 @@ function eggPos() { return {x: arena.x + world.egg.u * arena.w, y: arena.y + wor
 function hatch() {
   const p = eggPos(), s = spider, now = gameNow();
   world.egg = null; s.bornAt = now; s.stageStart = now; s.meals = 0; s.stage = 0; s.refreshLimbs();
-  s.pos.x = p.x; s.pos.y = p.y; s.vel.x = s.vel.y = 0; s.heading = rnd(0, TAU); s.abdW = s.heading; s.scale = s.targetScale() * 0.55; s.fresh = 1;
+  s.pos.x = p.x; s.pos.y = p.y; s.vel.x = s.vel.y = 0; s.heading = rnd(0, TAU); s.abdW = s.heading; s.scale = s.targetScale() * 0.55; s.fresh = 1; s.softT = 6;
   s.updateBody(0.016); s.placeLegs(); s.enter('PATROL'); s.pause = 2;
   for (let i = 0; i < 9; i++) { const a = rnd(0, TAU), v = rnd(60, 120); world.parts.push({x: p.x, y: p.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: rnd(2.5, 4), t: 'ling', a}); }
   world.parts.push({x: p.x, y: p.y - 26, vy: -14, life: 3, t: `${s.genome.name} hatched!`, big: true});
+  for (let i = 0; i < 2; i++) {   // a first meal: a couple of flies settle nearby
+    const a = rnd(0, TAU), r = rnd(120, 200), fx = clamp(p.x + Math.cos(a) * r, arena.x + 20, arena.x + arena.w - 20), fy = clamp(p.y + Math.sin(a) * r, arena.y + 20, arena.y + arena.h - 20);
+    if (!inObstacle(fx, fy, 6)) { const f = new Fly(fx, fy, 'drop'); f.t = rnd(6, 12); world.flies.push(f); }
+  }
   Snd.stageUp(); save();
 }
 function updateEgg(dt) {
@@ -2097,7 +2106,7 @@ function updateHUD(fps) {
       hudEls.vx.textContent = mi.premolt ? 'premolt · ' + (mi.ready ? 'any moment' : fmtDur(mi.left)) : `meals ${mi.meals}/${mi.mealsNeed} · ${mi.left > 0 ? fmtDur(mi.left) : 'time ✓'}`;
       hudEls.bx.style.width = pct(Math.min(tf, mf));
     }
-    hudEls.age.textContent = `age ${fmtDur(now - s.bornAt)} · ${G.morph}` + (s.fresh > 0.05 ? ' · soft' : '');
+    hudEls.age.textContent = `age ${fmtDur(now - s.bornAt)} · ${G.morph}` + (s.softT > 0 ? ' · soft ' + Math.ceil(s.softT) + 's' : s.fresh > 0.05 ? ' · new skin' : '');
   }
   hudEls.mind.textContent = Brain.label();
   hudEls.vh.textContent = pct(1 - s.hunger); hudEls.bh.style.width = pct(1 - s.hunger);
