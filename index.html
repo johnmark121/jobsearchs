@@ -110,6 +110,8 @@ const STATE_PARAMS = {
   AMBUSH_COVER:    {v:85,  st:.35, ht:.24, cr:.5,  palp:'tuck'},
   FLANK_INTERCEPT: {v:165, st:.22, ht:.14, cr:.2,  palp:'tuck'},
   LUNGE:           {v:620, st:.07, ht:.05, cr:0,   palp:'tuck'},
+  MESMERIZE:       {v:16,  st:.6,  ht:.3,  cr:.05, palp:'wave'},   // cuttlefish passing-cloud display
+  ENVELOP:         {v:470, st:.08, ht:.06, cr:0,   palp:'tuck'},   // octopus web-over pounce
   EVADE:           {v:290, st:.12, ht:.09, cr:.25, palp:'tuck'},
   FEED:            {v:0,   st:.4,  ht:.3,  cr:.35, palp:'feed'},
   GREET:           {v:0,   st:.4,  ht:.18, cr:0,   palp:'wave'},
@@ -344,6 +346,7 @@ const Snd = {
   stageUp() { [880, 1108, 1320, 1760].forEach((f, i) => this.chirp(f, i * 0.12, 0.08)); },
   drink() { if (!this.ok()) return; this.tone(this.ctx.currentTime, 'sine', 520, 900, 0.05, 0.09); },
   splash() { if (!this.ok()) return; const t = this.ctx.currentTime; for (let i = 0; i < 4; i++) this.hit(t + i * 0.03, 'highpass', rnd(2500, 5000), 0.7, 0.05, 0.06, rnd(-.4, .4)); },
+  cloud(pan) { if (!this.ok()) return; this.hit(this.ctx.currentTime, 'bandpass', 210, 1.3, 0.035, 0.32, pan, 520); },
   flick(pan) { if (!this.ok()) return; this.hit(this.ctx.currentTime, 'bandpass', 260, 2, 0.06, 0.12, pan, 900); },
   buzz(level, pan, pitch) {
     if (!this.ctx || !this.buzzG) return;
@@ -369,6 +372,7 @@ class Fly {
     this.z = mode === 'drop' ? 38 : mode === 'fly' ? rnd(22, 38) : 0; this.zt = this.z;
     this.t = mode === 'fly' ? rnd(2, 4.5) : rnd(2.5, 6);
     this.h = rnd(0, TAU); this.vx = 0; this.vy = 0; this.speed = 0; this.wing = rnd(0, TAU);
+    this.trance = 0; this.susc = rnd(0.35, 1.25);   // hidden: how strongly this individual falls for the display
     this.byUser = mode === 'drop'; this.react = -1; this.dead = false; this.caught = false; this.sz = rnd(.85, 1.15); this.bt = rnd(0, 9); this.eaten = 0;
   }
   update(dt) {
@@ -376,13 +380,17 @@ class Fly {
     this.bt += dt;
     const sp = spider, dx = this.x - sp.pos.x, dy = this.y - sp.pos.y, d = Math.hypot(dx, dy) || 1;
     if (this.mode !== 'fly' && this.react < 0) {
-      const alarmR = 30 + 42 * sp.scale + sp.speed * 0.28;
-      if ((d < alarmR && sp.speed > 42) || d < 10 * sp.scale + 9) this.react = rnd(0.08, 0.22);
+      const calm = (1 - 0.6 * this.trance) * (1 - 0.35 * sp.camo);   // entranced / fooled by camouflage
+      const alarmR = (30 + 42 * sp.scale + sp.speed * 0.28) * calm;
+      if ((d < alarmR && sp.speed > 42 / calm) || d < 10 * sp.scale + 9) this.react = rnd(0.08, 0.22) + this.trance * 0.5;
     }
     if (this.react >= 0) {
       this.react -= dt;
       if (this.react < 0) { this.mode = 'fly'; this.t = rnd(2.5, 5); this.h = Math.atan2(dy, dx) + rnd(-.6, .6); this.zt = rnd(24, 40); this.vx = Math.cos(this.h) * 140; this.vy = Math.sin(this.h) * 140; Snd.flick(panOf(this.x)); }
     }
+    // cuttlefish "passing cloud": grounded prey that watch the display slip into a trance
+    if (this.mode !== 'fly' && this.mode !== 'drop' && sp.display > 0.1 && d < 280) this.trance = Math.min(1, this.trance + dt * 0.32 * this.susc * sp.display * (0.4 + 0.6 * (1 - d / 280)));
+    else this.trance = Math.max(0, this.trance - dt * 0.18);
     this.t -= dt;
     const k = 1 - Math.exp(-dt * 5);
     switch (this.mode) {
@@ -406,6 +414,7 @@ class Fly {
       }
       case 'land':
         this.vx *= Math.exp(-dt * 8); this.vy *= Math.exp(-dt * 8);
+        if (this.t < 0 && this.trance > 0.3) this.t = 0.8;   // entranced: stays put
         if (this.t < 0) {
           if (Math.random() < 0.38) { this.mode = 'fly'; this.t = rnd(2, 4.5); this.zt = rnd(20, 36); }
           else { this.mode = 'walk'; this.t = rnd(0.6, 1.8); this.h = rnd(0, TAU); }
@@ -415,7 +424,7 @@ class Fly {
         const s = 20 + 6 * Math.sin(this.bt * 9);
         this.h += rnd(-1, 1) * dt * 2;
         this.vx += (Math.cos(this.h) * s - this.vx) * k; this.vy += (Math.sin(this.h) * s - this.vy) * k;
-        if (this.t < 0) { this.mode = 'land'; this.t = rnd(2, 6); }
+        if (this.t < 0 || this.trance > 0.4) { this.mode = 'land'; this.t = rnd(2, 6); }
         break;
       }
     }
@@ -508,7 +517,7 @@ function gammaRand(k) {
 const betaRand = (a, b) => { const x = gammaRand(a), y = gammaRand(b); return x / (x + y); };
 const NN_IN = 8, NN_H = 8;
 const NN_LABELS = ['dist', 'speed', 'away', 'cross', 'air', 'aim', 'self', 'crouch'];
-const CTX = ['still', 'walking', 'flying'], TACTICS = ['stalk', 'ambush', 'flank'];
+const CTX = ['still', 'walking', 'flying'], TACTICS = ['stalk', 'ambush', 'flank', 'trance'];
 const TRAITS = [['bold', 'shy', 'bold'], ['curious', 'cautious', 'curious'], ['active', 'lazy', 'energetic'], ['affection', 'aloof', 'affectionate']];
 const Brain = {
   // --- 1. learned tactics: Beta-Bernoulli arms per (prey context x tactic), chosen by Thompson sampling
@@ -520,9 +529,9 @@ const Brain = {
   live: {x: new Float32Array(NN_IN), h: new Float32Array(NN_H), p: 0, active: false},
   init() {
     this.arms = [
-      [{a: 2, b: 1}, {a: 1, b: 1.5}, {a: 1, b: 1}],   // still prey: instinct favours stalking
-      [{a: 1, b: 1}, {a: 1, b: 1}, {a: 2, b: 1}],     // walking prey: instinct favours flanking
-      [{a: 1, b: 1.5}, {a: 2, b: 1}, {a: 1, b: 1}],   // flying prey: instinct favours ambush
+      [{a: 2, b: 1}, {a: 1, b: 1.5}, {a: 1, b: 1}, {a: 1.2, b: 1}],   // still prey: instinct favours stalking
+      [{a: 1, b: 1}, {a: 1, b: 1}, {a: 2, b: 1}, {a: 1, b: 1}],       // walking prey: instinct favours flanking
+      [{a: 1, b: 1.5}, {a: 2, b: 1}, {a: 1, b: 1}, {a: 1, b: 1.5}],   // flying prey: instinct favours ambush
     ].map(r => r.map(c => ({a: c.a, b: c.b, n: 0, w: 0})));
     this.W1 = Array.from({length: NN_H}, () => Float32Array.from({length: NN_IN}, () => randn() * 0.5));
     this.b1 = new Float32Array(NN_H); this.W2 = Float32Array.from({length: NN_H}, () => randn() * 0.5); this.b2 = 0;
@@ -571,9 +580,10 @@ const Brain = {
   context(T) { return T.z > 12 || T.mode === 'fly' ? 2 : T.speed > 12 ? 1 : 0; },
   chooseTactic(ctx) {
     const bold = this.traits.bold; let best = 0, bs = -1;
-    for (let t = 0; t < 3; t++) {
+    for (let t = 0; t < TACTICS.length; t++) {
       const arm = this.arms[ctx][t];
-      const sc = betaRand(arm.a, arm.b) + (bold - 0.5) * 0.18 * (t === 1 ? -1 : 1);   // bold spiders prefer active tactics
+      const sc = betaRand(arm.a, arm.b) + (bold - 0.5) * 0.18 * (t === 1 ? -1 : 1)   // bold spiders prefer active tactics
+        + (t === 3 ? (this.traits.curious - 0.5) * 0.2 : 0);                          // curious ones experiment with the trance
       if (sc > bs) { bs = sc; best = t; }
     }
     return best;
@@ -600,7 +610,7 @@ const Brain = {
   restore(d) {
     if (!d) return;
     try {
-      if (d.arms && d.arms.length === 3) this.arms = d.arms;
+      if (d.arms && d.arms.length === 3) { this.arms = d.arms; this.arms.forEach(r => { while (r.length < TACTICS.length) r.push({a: 1, b: 1, n: 0, w: 0}); }); }
       if (d.traits) for (const k in this.traits) if (typeof d.traits[k] === 'number') this.traits[k] = clamp(d.traits[k], 0.05, 0.95);
       if (d.W1 && d.W1.length === NN_H) { this.W1 = d.W1.map(r => Float32Array.from(r)); this.b1 = Float32Array.from(d.b1); this.W2 = Float32Array.from(d.W2); this.b2 = +d.b2 || 0; }
       if (Array.isArray(d.buf)) this.buf = d.buf; this.samples = d.samples | 0; if (Array.isArray(d.recent)) this.recent = d.recent; if (d.lesson) this.lesson = d.lesson;
@@ -623,6 +633,10 @@ function makeGenome() {
     chevrons: 3 + (Math.random() * 3 | 0),
     traits: {bold: g(0.5, 0.13, 0.15, 0.85), curious: g(0.5, 0.13, 0.15, 0.85), active: g(0.5, 0.13, 0.15, 0.85), affection: g(0.5, 0.13, 0.15, 0.85)}};
 }
+function blendHex(a, b, t) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16), m = (x, y) => Math.round(lerp(x, y, t));
+  return '#' + [m(pa >> 16, pb >> 16), m(pa >> 8 & 255, pb >> 8 & 255), m(pa & 255, pb & 255)].map(v => v.toString(16).padStart(2, '0')).join('');
+}
 function hsl2hex(h, s2, l) {
   h = ((h % 360) + 360) % 360; s2 = clamp(s2, 0, 1); l = clamp(l, 0, 1);
   const k = n => (n + h / 30) % 12, a = s2 * Math.min(l, 1 - l), f = n => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
@@ -636,6 +650,7 @@ class Spider {
     this.pos = {x: 0, y: 0}; this.vel = {x: 0, y: 0}; this.heading = -PI / 2; this.hv = {v: 0}; this.angVel = 0; this.speed = 0;
     this.stage = 0; this.scale = STAGES[0].scale; this.genome = null; this.bornAt = 0; this.stageStart = 0; this.meals = 0;
     this.premolt = false; this.premoltK = 0; this.legX = 1;
+    this.camo = 0; this.display = 0; this.armWave = 0; this.splay = 1; this.cageT = 0; this.hopZ = 0; this.belief = 0; this.cloudPh = 0; this.cloudRate = 1; this.envPt = {x: 0, y: 0};
     this.hunger = 0.45; this.thirst = 0.3; this.energy = 0.9; this.bond = 0.2; this.age = 0; this.fresh = 0;
     this.crouch = 0; this.crouchT = 0; this.crouchV = {v: 0}; this.tuck = 0;
     this.fang = 0; this.fangT = 0; this.abdW = this.heading; this.abdV = 0; this.bob = rnd(0, 9);
@@ -684,8 +699,9 @@ class Spider {
   bodyR() { return 14 * this.scale; }
   speedMul() { return (0.5 + 0.5 * this.scale) * (0.6 + 0.4 * this.energy) * (0.85 + 0.3 * Brain.traits.active) * (this.genome ? this.genome.speed : 1) * (1 - 0.35 * this.fresh); }
   lungeR() { return 70 * this.scale + 26; }
+  envelopR() { return 52 * this.scale + 30; }
   restLocal(leg, out) {
-    const a = REST_ANG[leg.idx], tuckMul = lerp(1, 0.34, this.tuck) * lerp(1, 1.06, this.crouch);
+    const a = REST_ANG[leg.idx], tuckMul = lerp(1, 0.34, this.tuck) * lerp(1, 1.06, this.crouch) * this.splay;
     const reach = leg.total * this.scale * REST_REACH[leg.idx] * tuckMul;
     out.x = 2 * this.scale + Math.cos(a) * reach; out.y = leg.side * Math.sin(a) * reach; return out;
   }
@@ -786,6 +802,11 @@ class Spider {
     this.maxSpeed = P.v; this.smoothT = P.st; this.headT = P.ht; this.crouchT = P.cr; this.palpMode = P.palp;
     this.cover = null; this.coverT = 0; this.faceAlways = false;
     const pan = panOf(this.pos.x);
+    if (st === 'MESMERIZE') { this.belief = 0; }
+    if (st === 'ENVELOP') {
+      Snd.hydraulic(true, pan); this.fangT = 1;
+      const T = this.target; if (T) { this.envPt.x = T.x + T.vx * 0.15; this.envPt.y = T.y + T.vy * 0.15; } else { this.envPt.x = this.pos.x; this.envPt.y = this.pos.y; }
+    }
     if (st === 'LUNGE') { Snd.hydraulic(true, pan); this.fangT = 1; this.lockLunge = false; }
     if (st === 'EVADE') { Snd.hydraulic(false, pan); Brain.abandon(); Brain.nudge('bold', this.threatPoke ? -0.05 : -0.03); Brain.nudge('affection', -0.015); }
     if (st === 'STALK') this.crouchT = clamp(P.cr * (1.2 - 0.4 * Brain.traits.bold), 0, 1);
@@ -840,6 +861,10 @@ class Spider {
     const st = this.state, s = this.scale;
     if (st === 'MOLT') return;
     if (this.threat && st !== 'EVADE') { if (st === 'FEED' && this.prey) { /* keeps prey in fangs while fleeing */ } this.enter('EVADE'); return; }
+    if (st === 'ENVELOP') {
+      if (this.stateT > 0.6) { this.lungeCD = 1.4; Brain.nudge('curious', -0.003); this.enter('STALK'); }   // cage closed on nothing
+      return;
+    }
     if (st === 'LUNGE') {
       if (this.stateT > 0.36) {
         if (this.lungeFeat) { Brain.learnLunge(this.lungeFeat, false, this.lungeP); this.lungeFeat = null; Brain.nudge('bold', -0.004); }
@@ -885,6 +910,14 @@ class Spider {
       }
       if (now - ep.t0 > 30) { Brain.endEpisode(false, now, 'gave up'); this.target = null; this.lkp = null; this.enter('PATROL'); this.pause = rnd(1, 2); return; }
       // 3. neural strike decision: lunge when the model predicts a catch is likely enough
+      // 4. TRANCE: octopus camouflage -> cuttlefish passing-cloud hypnosis -> octopus web-over pounce
+      if (TACTICS[ep.tactic] === 'trance') {
+        if (fly) { this.enter('AMBUSH_COVER'); return; }   // wait (camouflaged) for it to land first
+        const er = this.envelopR();
+        if (st === 'MESMERIZE' && this.lungeCD <= 0 && this.tFocus && d < er && (this.belief > 0.65 || d < er * 0.55 || this.stateT > 10)) { ep.lunges++; this.enter('ENVELOP'); return; }
+        this.enter(st === 'MESMERIZE' ? (d > lr * 3.2 ? 'STALK' : 'MESMERIZE') : (d > lr * 2.6 ? 'STALK' : 'MESMERIZE'));
+        return;
+      }
       if (!fly && this.tFocus && this.lungeCD <= 0 && d < lr * 1.35) {
         const x = Brain.features(this, T, this.lungeX || (this.lungeX = new Float32Array(NN_IN))), pr = Brain.forward(x);
         const thr = lerp(0.62, 0.32, this.hunger) - (Brain.traits.bold - 0.5) * 0.16;
@@ -1037,6 +1070,27 @@ class Spider {
         }
         break;
       }
+      case 'MESMERIZE': {
+        if (!T) break;
+        const er = this.envelopR(), d = Math.hypot(T.x - this.pos.x, T.y - this.pos.y), a = Math.atan2(T.y - this.pos.y, T.x - this.pos.x);
+        // read the prey: stillness is the observable sign of a trance (the trance itself is hidden)
+        const still = this.tVis && T.speed < 4 ? 1 : 0;
+        this.belief += (still - this.belief) * Math.min(1, dt * 0.9);
+        const restless = T.speed > 10;
+        this.cloudRate = restless ? 2.2 : 1 + (1 - this.belief) * 0.6;   // restless prey: freeze & intensify the display
+        if (!restless && d > er * 0.7) { setGoal(T.x - Math.cos(a) * er * 0.7, T.y - Math.sin(a) * er * 0.7); v *= 0.5 + this.belief; }
+        setFace(T.x, T.y); this.faceAlways = true;
+        this.sub = (restless ? 'freeze · ' : '') + 'trance ' + Math.round(this.belief * 100) + '%';
+        break;
+      }
+      case 'ENVELOP': {
+        setGoal(this.envPt.x, this.envPt.y); this.fangT = 1;
+        if (T && !T.caught && Math.hypot(T.x - this.pos.x, T.y - this.pos.y) < 22 * s + 12 && T.z < 14) {
+          Brain.nudge('curious', 0.006); this.cageT = 0.45; this.capture(T);   // the leg-cage closes around it
+        }
+        this.sub = this.stateT < 0.3 ? 'web-over leap' : 'closing cage';
+        break;
+      }
       case 'EVADE': {
         this.coverT -= dt;
         const th = this.threat || this.lastThreatPos || this.pos;
@@ -1101,6 +1155,17 @@ class Spider {
         break;
       }
     }
+    // cephalopod-inspired body controls
+    const trance = Brain.episode && TACTICS[Brain.episode.tactic] === 'trance';
+    const camoT = (trance && (st === 'STALK' || st === 'AMBUSH_COVER')) ? 1 : st === 'MESMERIZE' ? 0.15 : st === 'AMBUSH_COVER' ? 0.6 : 0;
+    this.camo += (camoT - this.camo) * Math.min(1, dt * 1.2);
+    this.display += ((st === 'MESMERIZE' ? 1 : 0) - this.display) * Math.min(1, dt * 3);
+    this.armWave += ((st === 'MESMERIZE' ? 1 : 0) - this.armWave) * Math.min(1, dt * 4);
+    const caging = st === 'ENVELOP' || this.cageT > 0, air = st === 'ENVELOP' && this.stateT < 0.3;
+    this.splay += ((caging ? (air ? 1.35 : 0.62) : 1) - this.splay) * Math.min(1, dt * (caging ? 20 : 4));
+    this.hopZ = st === 'ENVELOP' && this.stateT < 0.3 ? Math.sin(PI * this.stateT / 0.3) * 16 * s : this.hopZ * Math.exp(-dt * 10);
+    const prevPh = this.cloudPh; this.cloudPh += dt * this.cloudRate * this.display * 1.4;
+    if (Math.floor(this.cloudPh) !== Math.floor(prevPh)) Snd.cloud(panOf(this.pos.x));
     if (this.state !== 'MOLT') this.scale += (this.targetScale() - this.scale) * Math.min(1, dt * (this.scale < this.targetScale() * 0.8 ? 0.6 : 2));
     this.desSpeed = v * this.speedMul();
   }
@@ -1138,7 +1203,7 @@ class Spider {
     let cx = p.x, cy = p.y, maxS = Math.max(40, this.desSpeed), T = this.smoothT;
     if (this.goal) {
       const g = this.goal, dx = g.x - p.x, dy = g.y - p.y, d = Math.hypot(dx, dy) || 1e-6;
-      if (this.state === 'LUNGE') { cx = g.x; cy = g.y; }
+      if (this.state === 'LUNGE' || this.state === 'ENVELOP') { cx = g.x; cy = g.y; }
       else {
         const dir = this.contextSteer(dx / d, dy / d, d);
         const a = 1 - Math.exp(-dt * 9);
@@ -1234,6 +1299,20 @@ class Spider {
     f *= lerp(1, 0.8, this.crouch);
     f = Math.min(f, 4.6); this.gaitF = f;
     const act = clamp(f / 0.6, 0, 1), minSwing = 2.7 * lerp(1, 0.75, this.crouch);
+    if (this.cageT > 0) this.cageT -= dt;
+    if (this.state === 'ENVELOP' || this.cageT > 0) {
+      const t = this.state === 'ENVELOP' ? this.stateT : 1, air = t < 0.3, k = 1 - Math.exp(-dt * (air ? 24 : 16));
+      this.wasEnv = true;
+      for (const leg of L) {
+        this.restWorld(leg, tmpA, this.pos.x + this.vel.x * 0.06, this.pos.y + this.vel.y * 0.06, this.heading);
+        leg.foot.x += (tmpA.x - leg.foot.x) * k; leg.foot.y += (tmpA.y - leg.foot.y) * k;
+        leg.lift = air ? Math.sin(PI * t / 0.3) * 10 * s : leg.lift * Math.exp(-dt * 20);
+        if (!air && !leg.planted) { leg.flash = 1; if (leg.idx === 0) Snd.step(leg.side * 0.4, s, 0, 1); }
+        leg.planted = !air;
+      }
+      return;
+    }
+    if (this.wasEnv) { this.wasEnv = false; for (const leg of L) { leg.planted = true; leg.lift = 0; leg.phase = leg.phase0 * STANCE; this.setOsc(leg, phiToTheta(leg.phase)); } }
     this.cpgStep(dt, f, act, minSwing);
     const thr = Math.max(13 * s, this.stride * 0.74) * lerp(1, 0.55, this.tuck);
     let swinging = 0; for (const l of L) if (!l.planted) swinging++;
@@ -1280,7 +1359,7 @@ class Spider {
     this.fang += (this.fangT - this.fang) * Math.min(1, dt * (this.fangT > this.fang ? 22 : 8));
     let liftSum = 0; for (const l of this.legs) liftSum += l.lift;
     const molt = this.state === 'MOLT' && this.moltT < MOLT_SHED ? Math.sin(world.time * 55) * 0.5 * s : 0;
-    this.zc = 10 * s * (1 - 0.42 * this.crouch) * (1 - 0.5 * this.tuck) + Math.sin(this.bob) * 0.45 * s + liftSum * 0.035 + molt;
+    this.zc = 10 * s * (1 - 0.42 * this.crouch) * (1 - 0.5 * this.tuck) + Math.sin(this.bob) * 0.45 * s + liftSum * 0.035 + molt + this.hopZ;
     // planted-foot centroid suspension
     const c = Math.cos(this.heading), sn = Math.sin(this.heading);
     let mx = 0, my = 0, n = 0;
@@ -1362,7 +1441,13 @@ class Spider {
       const aa = ATTACH_ANG[L.idx];
       this.toWorld((1 + Math.cos(aa) * 9) * s, L.side * Math.sin(aa) * 8.5 * s, tmpA);
       const bow = (L.idx < 2 ? 1 : -1) * 3.5 * s;   // front pairs bow forward, rear pairs backward
-      this.solvePlanar(L, tmpA.x, tmpA.y, this.zc, L.foot.x, L.foot.y, L.lift, LEG_Z, LIFT_W, L.lift, bow, hMul, a);
+      let fx = L.foot.x, fy = L.foot.y, lz = L.lift;
+      if (L.idx === 0 && this.armWave > 0.01) {   // front legs raised and undulating like cuttlefish arms
+        const w = this.armWave, ph = world.time * 4.2 + L.side * 1.3, side = L.side;
+        fx += (this.cs * 7 - this.sn * side * 4 * Math.sin(ph)) * s * w; fy += (this.sn * 7 + this.cs * side * 4 * Math.sin(ph)) * s * w;
+        lz += (13 + 6 * Math.sin(ph * 1.3)) * s * w;
+      }
+      this.solvePlanar(L, tmpA.x, tmpA.y, this.zc, fx, fy, lz, LEG_Z, LIFT_W, lz, bow, hMul, a);
     }
     for (const p of this.palps) {
       this.toWorld(13 * s, p.side * 3.6 * s, tmpA); const wx = tmpA.x, wy = tmpA.y;
@@ -1388,22 +1473,34 @@ class Spider {
 
   // ---------- rendering
   palette() {
-    const f = this.fresh, pk = Math.round(this.premoltK * 20) / 20;
-    if (this.colors && Math.abs(this.colorFresh - f) < 0.01 && this.colorPK === pk) return this.colors;
+    const f = this.fresh, pk = Math.round(this.premoltK * 20) / 20, cm = Math.round(this.camo * 20) / 20, dp = Math.round(this.display * 10) / 10;
+    if (this.colors && Math.abs(this.colorFresh - f) < 0.01 && this.colorPK === pk && this.colorCM === cm && this.colorDP === dp) return this.colors;
     const mix = (a, b) => {
       const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
       const r = Math.round(lerp(pa >> 16, pb >> 16, f)), g = Math.round(lerp(pa >> 8 & 255, pb >> 8 & 255, f)), bl = Math.round(lerp(pa & 255, pb & 255, f));
       return `rgb(${r},${g},${bl})`;
     };
-    const G = this.genome || {hue: 28, sat: 0.27, lit: 0.18, contrast: 1}, h = G.hue, sa = G.sat, L = G.lit * (1 - 0.28 * pk), ct = G.contrast;
-    const c = (sm, lm, cap) => hsl2hex(h, sa * sm, Math.min(cap || 0.8, L * lm));
+    const G = this.genome || {hue: 28, sat: 0.27, lit: 0.18, contrast: 1}, h = G.hue, sa = G.sat, L = G.lit * (1 - 0.28 * pk) * (1 + 0.6 * dp), ct = G.contrast;
+    // octopus-style background matching: blend each colour toward the slate floor tone
+    const floor = lm => hsl2hex(212, 0.14, 0.05 + 0.03 * Math.min(1, lm / 2));
+    const c = (sm, lm, cap) => blendHex(hsl2hex(h, sa * sm, Math.min(cap || 0.8, L * lm)), floor(lm), cm * 0.85);
     const P = '#d8c7a5';
     this.colors = {
       cara: mix(c(1, 1), P), rim: mix(c(0.8, 0.42), '#8f806a'), band: mix(c(0.9, 2.4 * ct, 0.75), '#efe3cc'), groove: 'rgba(10,7,5,0.55)',
       legA: mix(c(1, 1.15), P), legB: mix(c(0.9, 2.1 * ct, 0.7), '#efe3cc'), out: mix(c(0.6, 0.32), '#6b5f4f'), node: mix(c(0.8, 2.6, 0.78), '#f4ead6'),
       abd: mix(c(1, 0.88), P), chev: mix(c(0.85, 2.6 * ct, 0.8), '#f2e6cf'), cheli: mix(c(0.8, 0.62), '#a8987e'), fang: mix(c(0.3, 0.2), '#5a4c3c'),
     };
-    this.colorFresh = f; this.colorPK = pk; return this.colors;
+    this.colorFresh = f; this.colorPK = pk; this.colorCM = cm; this.colorDP = dp; return this.colors;
+  }
+  // cuttlefish "passing cloud": dark chromatophore bands streaming head-to-tail
+  cloudBands(c, xOff, bw) {
+    const span = 52, ph = this.cloudPh * 13;
+    c.fillStyle = `rgba(4,4,7,${(0.78 * this.display).toFixed(3)})`; c.beginPath();
+    for (let k = 0; k < 4; k++) {
+      const x = 16 - ((ph + k * span / 4) % span) + xOff;   // body-frame x shifted into this part's frame
+      c.moveTo(x + 2.5, -14 * bw); c.quadraticCurveTo(x - 2, 0, x + 2.5, 14 * bw); c.lineTo(x - 2, 14 * bw); c.quadraticCurveTo(x - 6.5, 0, x - 2, -14 * bw); c.closePath();
+    }
+    c.fill();
   }
   drawLimb(c, limb, widths, C, s, isLeg) {
     const R = limb.R, Z = limb.Z, n = limb.n;
@@ -1479,6 +1576,7 @@ class Spider {
     c.bezierCurveTo(-34, 3.5 * bw, -29, 8 * bw, -21, 9.5 * bw);
     c.bezierCurveTo(-13, 11 * bw, -2, 8 * bw, -1, 0);
     c.fill(); c.stroke();
+    if (this.display > 0.02) { c.save(); c.clip(); this.cloudBands(c, 12.5, bw); c.restore(); }
     c.strokeStyle = C.chev; c.lineWidth = 1.2; c.beginPath();
     c.moveTo(-4, 0); c.lineTo(-12, 0);
     for (let k = 0; k < G.chevrons; k++) { const x = -15 - k * (17 / G.chevrons), w = (4.8 - k * (3.2 / G.chevrons)) * bw; c.moveTo(x + 2.6, -w); c.lineTo(x, 0); c.lineTo(x + 2.6, w); }
@@ -1506,6 +1604,10 @@ class Spider {
     c.bezierCurveTo(-12, -6, -8, -11, 0, -11); c.bezierCurveTo(8, -11, 15, -6.5, 15, 0);
     c.fill(); c.stroke();
     c.fillStyle = C.band; c.globalAlpha = 0.55; c.beginPath(); c.ellipse(1.5, 0, 11.5, 3, 0, 0, TAU); c.fill(); c.globalAlpha = 1;
+    if (this.display > 0.02) {   // passing cloud over the carapace
+      c.save(); c.beginPath(); c.moveTo(15, 0); c.bezierCurveTo(15, 6.5, 8, 11, 0, 11); c.bezierCurveTo(-8, 11, -12, 6, -12, 0);
+      c.bezierCurveTo(-12, -6, -8, -11, 0, -11); c.bezierCurveTo(8, -11, 15, -6.5, 15, 0); c.clip(); this.cloudBands(c, 0, 1); c.restore();
+    }
     c.strokeStyle = C.groove; c.lineWidth = 0.7; c.beginPath();
     for (const sd of [-1, 1]) for (let k = 0; k < 5; k++) {
       const a = (0.45 + k * 0.5) * sd, dx = Math.cos(a), dy = Math.sin(a);
@@ -1793,6 +1895,11 @@ function drawSenses(c) {
   }
   // vibration stimulus
   if (s.stim) { const al = clamp(1 - (now - s.stim.t) / 2.5, 0, 1), r = 6 + (now * 30 % 14); c.strokeStyle = `rgba(160,190,220,${(0.4 * al).toFixed(3)})`; c.beginPath(); c.arc(s.stim.x, s.stim.y, r, 0, TAU); c.stroke(); }
+  // prey trance level (hidden state, shown for the observer) and envelop reach
+  for (const f of world.flies) if (f.trance > 0.05 && !f.caught) {
+    c.strokeStyle = `rgba(200,120,255,${(0.6 * f.trance).toFixed(3)})`; c.beginPath(); c.arc(f.x, f.y - f.z, 7 + 4 * Math.sin(now * 6) * f.trance, 0, TAU); c.stroke();
+  }
+  if (s.state === 'MESMERIZE') { c.strokeStyle = 'rgba(200,120,255,0.25)'; c.setLineDash([2, 4]); c.beginPath(); c.arc(s.pos.x, s.pos.y, s.envelopR(), 0, TAU); c.stroke(); c.setLineDash([]); }
   // intercept lead point
   if (s.state === 'FLANK_INTERCEPT' || s.state === 'LUNGE') {
     const p = s.lungePt; c.strokeStyle = 'rgba(230,110,80,0.6)';
@@ -1890,14 +1997,14 @@ function drawBrain(c) {
   c.fillStyle = '#8f9cab';
   c.fillText(`strike model · ${Brain.samples} lunges · acc ${Brain.recent.length ? Math.round(Brain.accuracy() * 100) + '%' : '—'}`, 10, 160);
   // -- tactics table
-  const tx0 = 70, cw = 52, ty0 = 180;
+  const tx0 = 64, cw = 45, ty0 = 180;
   c.fillStyle = '#6b7987'; c.fillText('TACTICS', 10, ty0);
   c.textAlign = 'center'; TACTICS.forEach((t, j) => c.fillText(t, tx0 + j * cw + cw / 2, ty0)); c.textAlign = 'start';
   const ep = Brain.episode;
   for (let i = 0; i < 3; i++) {
     const y = ty0 + 8 + i * 18; c.fillStyle = '#6b7987'; c.fillText(CTX[i], 10, y + 11);
-    let bestJ = 0, bm = -1; for (let j = 0; j < 3; j++) { const a = Brain.arms[i][j], m = a.a / (a.a + a.b); if (m > bm) { bm = m; bestJ = j; } }
-    for (let j = 0; j < 3; j++) {
+    let bestJ = 0, bm = -1; for (let j = 0; j < TACTICS.length; j++) { const a = Brain.arms[i][j], m = a.a / (a.a + a.b); if (m > bm) { bm = m; bestJ = j; } }
+    for (let j = 0; j < TACTICS.length; j++) {
       const a = Brain.arms[i][j], m = a.a / (a.a + a.b), x = tx0 + j * cw + 2;
       c.fillStyle = `rgba(217,164,65,${(0.06 + 0.5 * m * m).toFixed(3)})`; c.fillRect(x, y, cw - 4, 15);
       if (j === bestJ) { c.strokeStyle = 'rgba(217,164,65,0.6)'; c.lineWidth = 1; c.strokeRect(x + .5, y + .5, cw - 5, 14); }
