@@ -77,7 +77,7 @@ Your spider hatches from an egg sac (hold <b>Pet</b> on it to warm it) and grows
   <button id="cpg" class="on"><kbd>C</kbd>CPG</button>
   <button id="brainb" class="on"><kbd>B</kbd>Brain</button>
   <button id="stylev"><kbd>V</kbd>Natural</button>
-  <button id="mute"><kbd>M</kbd>Sound on</button>
+  <button id="mute"><kbd>M</kbd>Tap for sound</button>
   <button id="onlineb"><kbd>O</kbd>Online</button>
   <button id="reset">New egg</button>
 </div>
@@ -288,7 +288,7 @@ function buildBackground() {
 const Snd = {
   ctx: null, out: null, noise: null, muted: false, lastStep: 0, buzzG: null, buzzPan: null, buzzO: null, buzzO2: null, buzzT: 0,
   init() {
-    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    if (this.ctx) { if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {}); return; }   // iOS also uses 'interrupted'
     const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
     const c = this.ctx = new AC();
     const comp = c.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 4; comp.connect(c.destination);
@@ -315,7 +315,24 @@ const Snd = {
   },
   pan(v) { const c = this.ctx; if (c.createStereoPanner) { const p = c.createStereoPanner(); p.pan.value = clamp(v, -1, 1); return p; } return c.createGain(); },
   ok() { return this.ctx && this.ctx.state === 'running' && !this.muted; },
-  setMuted(m) { this.muted = m; if (this.out) this.out.gain.setTargetAtTime(m ? 0 : 0.75, this.ctx.currentTime, 0.03); },
+  setMuted(m) {
+    this.muted = m; if (this.out) this.out.gain.setTargetAtTime(m ? 0 : 0.75, this.ctx.currentTime, 0.03);
+    if (this.keepAlive) { if (m) this.keepAlive.pause(); else this.keepAlive.play().catch(() => {}); }
+  },
+  // Must run inside a user gesture that ends a tap (touchend / click): that is what iOS WebKit
+  // (Safari and Chrome on iPhone) accepts for starting audio.
+  unlock() {
+    this.init(); const c = this.ctx; if (!c) return;
+    if (c.state !== 'running') c.resume().catch(() => {});
+    try { const b = c.createBuffer(1, 1, 22050), src = c.createBufferSource(); src.buffer = b; src.connect(c.destination); src.start(0); } catch (e) {}
+    // iOS mutes Web Audio when the ring/silent switch is on. Asking for a "playback" audio session (iOS 17+)
+    // and keeping a silent <audio> element playing (older iOS) routes it like media instead.
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+    if (!this.keepAlive && /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document) {
+      const a = new Audio(silentWav()); a.loop = true; a.setAttribute('playsinline', ''); a.setAttribute('x-webkit-airplay', 'deny');
+      this.keepAlive = a; if (!this.muted) a.play().catch(() => { this.keepAlive = null; });
+    }
+  },
   hit(t0, type, f, Q, gain, dur, pan, f2) {
     const c = this.ctx, src = c.createBufferSource(); src.buffer = this.noise;
     const fl = c.createBiquadFilter(); fl.type = type; fl.frequency.setValueAtTime(f, t0); if (f2) fl.frequency.exponentialRampToValueAtTime(f2, t0 + dur); fl.Q.value = Q;
@@ -390,6 +407,15 @@ const Snd = {
     this.buzzO.frequency.setTargetAtTime(pitch, t, 0.1); this.buzzO2.frequency.setTargetAtTime(pitch * 1.037, t, 0.1);
   },
 };
+// a short silent 8-bit mono WAV, built in memory (used to switch iOS into media playback)
+function silentWav() {
+  const n = 4000, buf = new Uint8Array(44 + n), dv = new DataView(buf.buffer), str = (o, t) => { for (let i = 0; i < t.length; i++) buf[o + i] = t.charCodeAt(i); };
+  str(0, 'RIFF'); dv.setUint32(4, 36 + n, true); str(8, 'WAVE'); str(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, 8000, true); dv.setUint32(28, 8000, true); dv.setUint16(32, 1, true); dv.setUint16(34, 8, true); str(36, 'data'); dv.setUint32(40, n, true);
+  buf.fill(128, 44);
+  let bin = ''; for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
+  return 'data:audio/wav;base64,' + btoa(bin);
+}
 const panOf = x => clamp((x / W) * 2 - 1, -1, 1) * 0.8;
 
 // ============================================================ world
@@ -1829,7 +1855,12 @@ $('cpg').onclick = toggleCPG;
 function toggleBrain() { world.brain = !world.brain; $('brainb').classList.toggle('on', world.brain); }
 $('brainb').onclick = toggleBrain;
 function toggleSenses() { world.senses = !world.senses; $('senses').classList.toggle('on', world.senses); }
-function toggleMute() { Snd.init(); Snd.setMuted(!Snd.muted); $('mute').innerHTML = '<kbd>M</kbd>' + (Snd.muted ? 'Muted' : 'Sound on'); $('mute').classList.toggle('on', Snd.muted); }
+function toggleMute() { Snd.unlock(); Snd.setMuted(!Snd.muted); updateSoundBtn(); }
+function updateSoundBtn() {   // tells the truth: audio isn't running until a tap has unlocked it
+  const running = Snd.ctx && Snd.ctx.state === 'running', el = $('mute');
+  const t = Snd.muted ? 'Muted' : running ? 'Sound on' : 'Tap for sound';
+  if (el.dataset.t !== t) { el.dataset.t = t; el.innerHTML = '<kbd>M</kbd>' + t; el.classList.toggle('on', Snd.muted || !running); }
+}
 $('night').onclick = toggleNight; $('senses').onclick = toggleSenses; $('mute').onclick = toggleMute;
 $('reset').onclick = () => { if (!confirm('Lay a new egg? Your current spider, its memories and shed skins will be gone for good.')) return; try { localStorage.removeItem(SAVE_KEY); } catch (e) {} location.reload(); };
 $('col').onclick = () => { $('hud').classList.toggle('min'); $('col').textContent = $('hud').classList.contains('min') ? '+' : '–'; };
@@ -1839,7 +1870,8 @@ addEventListener('keydown', e => {
   if (k === '1') setTool('observe'); else if (k === '2') setTool('prey'); else if (k === '3') setTool('mist'); else if (k === '4') setTool('pet');
   else if (k === 'o') { Online.isOpen() ? Online.close() : Online.open(); } else if (k === 'v') setStyle(world.style + 1); else if (k === 'c') toggleCPG(); else if (k === 'b') toggleBrain(); else if (k === 'n') toggleNight(); else if (k === 's') toggleSenses(); else if (k === 'm') toggleMute();
 });
-document.addEventListener('pointerdown', () => Snd.init(), {capture: true});
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) document.addEventListener(ev, () => Snd.unlock(), {capture: true});
+document.addEventListener('visibilitychange', () => { if (!document.hidden && Snd.ctx && Snd.ctx.state !== 'running') Snd.ctx.resume().catch(() => {}); });
 
 function onMove(e) {
   const now = performance.now() / 1000, dt = Math.max(0.004, now - input.lastT);
@@ -2328,6 +2360,7 @@ function updateHUD(fps) {
   hudEls.vt.textContent = pct(1 - s.thirst); hudEls.bt.style.width = pct(1 - s.thirst);
   hudEls.ve.textContent = pct(s.energy); hudEls.be.style.width = pct(s.energy);
   hudEls.vb.textContent = pct(s.bond); hudEls.bb.style.width = pct(s.bond);
+  updateSoundBtn();
   hudEls.fps.textContent = Math.round(fps) + ' fps' + (TIMESCALE > 1 ? ' · ×' + TIMESCALE : '');
 }
 
