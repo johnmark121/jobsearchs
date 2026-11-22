@@ -48,7 +48,7 @@ button kbd{color:var(--dim);font:inherit;margin-right:4px}
 <b>1 Observe</b> – rest the cursor near her to be greeted by her pedipalps; flick it fast and she bolts for cover.<br>
 <b>2 Prey</b> – click to drop a fly. <b>3 Mist</b> – click to spray water droplets.<br>
 <b>4 Pet</b> – press and hold on her body.<br>
-<b>N</b> night · <b>S</b> senses overlay · <b>M</b> sound. Audio unlocks on first click.</div>
+<b>N</b> night · <b>S</b> senses overlay · <b>C</b> CPG network · <b>M</b> sound. Audio unlocks on first click.</div>
 <div id="tb">
   <button data-tool="observe" class="on"><kbd>1</kbd>Observe</button>
   <button data-tool="prey"><kbd>2</kbd>Prey</button>
@@ -57,6 +57,7 @@ button kbd{color:var(--dim);font:inherit;margin-right:4px}
   <span class="sep"></span>
   <button id="night"><kbd>N</kbd>Night</button>
   <button id="senses" class="on"><kbd>S</kbd>Senses</button>
+  <button id="cpg" class="on"><kbd>C</kbd>CPG</button>
   <button id="mute"><kbd>M</kbd>Sound on</button>
   <button id="reset">Reset</button>
 </div>
@@ -101,6 +102,17 @@ const STATE_PARAMS = {
   SLEEP:           {v:55,  st:.45, ht:.3,  cr:.3,  palp:'tuck'},
   MOLT:            {v:12,  st:.6,  ht:.5,  cr:.25, palp:'tuck'},
 };
+// ---- Central Pattern Generator: one Hopf oscillator per leg, wired as a ladder network
+// stance <=> y > 0 (theta in [0, PI)), swing <=> y < 0 (theta in [PI, 2PI)); theta maps piecewise onto gait phase phi
+const phiToTheta = p => p < STANCE ? PI * p / STANCE : PI + PI * (p - STANCE) / (1 - STANCE);
+const thetaToPhi = t => { t = ((t % TAU) + TAU) % TAU; return t < PI ? STANCE * t / PI : STANCE + (1 - STANCE) * (t - PI) / PI; };
+const CPG_LINKS = (() => {
+  const l = [], add = (a, b, w, kind) => l.push({a, b, w, kind, err: 0});
+  for (const base of [0, 4]) { for (let k = 0; k < 3; k++) add(base + k, base + k + 1, 1, 'ipsi'); for (let k = 0; k < 2; k++) add(base + k, base + k + 2, 0.35, 'long'); }
+  for (let k = 0; k < 4; k++) add(k, 4 + k, 1, 'contra');
+  for (let k = 0; k < 3; k++) { add(k, 5 + k, 0.45, 'diag'); add(4 + k, k + 1, 0.45, 'diag'); }
+  return l;
+})();
 const GW = 16, GH = 10;
 const SAVE_KEY = 'arachnigotchi.v1';
 
@@ -331,7 +343,7 @@ const panOf = x => clamp((x / W) * 2 - 1, -1, 1) * 0.8;
 
 // ============================================================ world
 const world = {
-  time: 0, flies: [], drops: [], exuviae: [], parts: [], night: false, senses: true, tool: 'observe', spawnT: 4,
+  time: 0, flies: [], drops: [], exuviae: [], parts: [], night: false, senses: true, cpg: true, tool: 'observe', spawnT: 4,
   danger: new Float32Array(GW * GH), yield: new Float32Array(GW * GH),
 };
 const input = {x: -9999, y: -9999, vx: 0, vy: 0, speed: 0, inside: false, down: false, still: 0, lastT: 0, lastMove: 0, petting: false};
@@ -488,14 +500,14 @@ class Spider {
     this.lungeCD = 0; this.lungePt = {x: 0, y: 0}; this.wp = null; this.pause = 0; this.cover = null; this.coverT = 0;
     this.feedKind = null; this.prey = null; this.drop = null; this.chewT = 0;
     this.palpMode = 'rest'; this.tapPh = 0; this.chirpT = 0; this.friend = false;
-    this.moltT = 0; this.moltFrom = 0; this.moltDone = false; this.stride = 30; this.gaitF = 0; this.settleCD = 0;
+    this.moltT = 0; this.moltFrom = 0; this.moltDone = false; this.stride = 30; this.gaitF = 0; this.settleCD = 0; this.cpgSync = 1; this.cpgK = 0; this.cpgSwingRate = 2.7;
     this.rayA = new Float32Array(15); this.rayS = new Float32Array(15); this.rayD = new Float32Array(15);
     this.legs = [];
     for (const side of [-1, 1]) for (let i = 0; i < 4; i++) {
       const name = LEG_NAMES[(side < 0 ? 0 : 4) + i];
       const L = makeLimb(LEG_SEG, LEG_LEN_MUL[i], LEG_Z, [.25, .2, .32, .24, .12, .05]);
       Object.assign(L, {name, side, idx: i, phase: PHASE0[name], phase0: PHASE0[name], planted: true,
-        foot: {x: 0, y: 0}, sw: {x: 0, y: 0}, tgt: {x: 0, y: 0}, lift: 0, flash: 0});
+        foot: {x: 0, y: 0}, sw: {x: 0, y: 0}, tgt: {x: 0, y: 0}, lift: 0, flash: 0, ox: 1, oy: 0, th: 0});
       this.legs.push(L);
     }
     this.palps = [-1, 1].map(side => Object.assign(makeLimb(PALP_SEG, 1, PALP_Z, [.25, .2, .28, .16, .08]), {side, tl: {x: 24, y: side * 7}, lift: 1, prevU: 0}));
@@ -524,7 +536,7 @@ class Spider {
     this.wp = null; this.cover = null;
   }
   placeLegs() {
-    for (const L of this.legs) { this.restWorld(L, L.foot, this.pos.x, this.pos.y, this.heading); L.planted = true; L.phase = L.phase0 * STANCE; L.init = false; }
+    for (const L of this.legs) { this.restWorld(L, L.foot, this.pos.x, this.pos.y, this.heading); L.planted = true; L.phase = L.phase0 * STANCE; this.setOsc(L, phiToTheta(L.phase)); L.init = false; }
     for (const P of this.palps) P.init = false;
   }
 
@@ -951,7 +963,7 @@ class Spider {
     return (idx === 0 || L[base + idx - 1].planted) && (idx === 3 || L[base + idx + 1].planted) && L[(base + 4) % 8 + idx].planted;
   }
   liftOff(leg) {
-    leg.planted = false; if (leg.phase < STANCE) leg.phase = STANCE; leg.sw.x = leg.foot.x; leg.sw.y = leg.foot.y;
+    leg.planted = false; if (leg.phase < STANCE) { leg.phase = STANCE; this.setOsc(leg, PI); } leg.sw.x = leg.foot.x; leg.sw.y = leg.foot.y;
     this.predictFoothold(leg, 2.7, leg.tgt);   // seed the smoothed swing target
   }
   predictFoothold(leg, rate, out) {
@@ -962,47 +974,72 @@ class Spider {
     const h = this.heading + clamp(this.angVel * tA, -0.8, 0.8);
     return this.restWorld(leg, out, this.pos.x + this.vel.x * tA, this.pos.y + this.vel.y * tA, h);
   }
+  // ---------- Central Pattern Generator (coupled Hopf oscillators)
+  setOsc(leg, th) { const r = Math.hypot(leg.ox, leg.oy) || 1; leg.th = th; leg.ox = r * Math.cos(th); leg.oy = r * Math.sin(th); }
+  // Each leg: x' = a(mu - r^2)x - w y + K sum w_ij (R(d_ij) q_j - q_i)_x ,  y' = a(mu - r^2)y + w x + ...
+  // w switches smoothly between stance and swing speeds (duty factor) via a sigmoid of y.
+  // R(d_ij) rotates neighbour j by the desired tetrapod-wave offset, so the network relaxes to the gait pattern.
+  cpgStep(dt, f, act, minSwing) {
+    const L = this.legs, SUB = 3, h = dt / SUB, alpha = 8, b = 40;
+    const wSt = PI * f / STANCE, wSwMin = PI * minSwing / (1 - STANCE), wSw = Math.max(PI * f / (1 - STANCE), wSwMin);
+    const K = 3.2 * act;
+    const dx = this._cdx || (this._cdx = new Float32Array(8)), dy = this._cdy || (this._cdy = new Float32Array(8));
+    for (let sub = 0; sub < SUB; sub++) {
+      for (let i = 0; i < 8; i++) { const l = L[i], r2 = l.ox * l.ox + l.oy * l.oy;
+        const w = wSt / (1 + Math.exp(-b * l.oy)) + wSw / (1 + Math.exp(b * l.oy));
+        dx[i] = alpha * (1 - r2) * l.ox - w * l.oy; dy[i] = alpha * (1 - r2) * l.oy + w * l.ox; }
+      if (K > 0) for (const ln of CPG_LINKS) {
+        const A = L[ln.a], B = L[ln.b], d = TAU * (A.phase0 - B.phase0), c = Math.cos(d), sn = Math.sin(d), k = K * ln.w;
+        const bx = c * B.ox - sn * B.oy, by = sn * B.ox + c * B.oy;   // B rotated to where A should be
+        const ax = c * A.ox + sn * A.oy, ay = -sn * A.ox + c * A.oy;  // A rotated to where B should be
+        dx[ln.a] += k * (bx - A.ox); dy[ln.a] += k * (by - A.oy);
+        dx[ln.b] += k * (ax - B.ox); dy[ln.b] += k * (ay - B.oy);
+        if (sub === 0) ln.err = Math.hypot(bx - A.ox, by - A.oy);
+      }
+      for (let i = 0; i < 8; i++) {
+        const l = L[i], old = l.th, nx = l.ox + dx[i] * h, ny = l.oy + dy[i] * h;
+        // keep each rhythm moving forward: stance may pause (standing still) but never rewinds; swing always completes
+        let d = angDiff(old, Math.atan2(ny, nx)); const swing = ((old % TAU) + TAU) % TAU >= PI;
+        d = swing ? Math.max(d, wSwMin * h * 0.5) : Math.max(d, 0);
+        const r = clamp(Math.hypot(nx, ny), 0.5, 1.5); l.th = old + d; l.ox = r * Math.cos(l.th); l.oy = r * Math.sin(l.th);
+      }
+    }
+    let sx = 0, sy = 0; for (const l of L) { const e = l.th - TAU * l.phase0; sx += Math.cos(e); sy += Math.sin(e); }
+    this.cpgSync = Math.hypot(sx, sy) / 8; this.cpgK = K; this.cpgSwingRate = wSw * (1 - STANCE) / PI;
+  }
   gait(dt) {
     const s = this.scale, L = this.legs, N = 8;
     this.stride = 30 * s * (1 + this.speed / 420);
     const reach = 60 * s;
-    let f = STANCE * (this.speed + Math.abs(this.angVel) * reach * 0.55) / this.stride;
+    let f = STANCE * (this.speed + Math.abs(this.angVel) * reach * 0.55) / this.stride;   // descending drive (Hz)
     f *= lerp(1, 0.8, this.crouch);
     f = Math.min(f, 4.6); this.gaitF = f;
-    const act = clamp(f / 0.6, 0, 1), K = 7 * act, minSwing = 2.7 * lerp(1, 0.75, this.crouch);
-    const dph = this._dph || (this._dph = new Float32Array(8));
-    for (let i = 0; i < N; i++) {
-      let c = 0; const li = L[i];
-      for (let j = 0; j < N; j++) if (j !== i) c += Math.sin(TAU * ((li.phase0 - L[j].phase0) - (li.phase - L[j].phase)));
-      dph[i] = f + K / (TAU * N) * c;
-    }
-    const thr = Math.max(13 * s, this.stride * 0.62) * lerp(1, 0.55, this.tuck);
+    const act = clamp(f / 0.6, 0, 1), minSwing = 2.7 * lerp(1, 0.75, this.crouch);
+    this.cpgStep(dt, f, act, minSwing);
+    const thr = Math.max(13 * s, this.stride * 0.74) * lerp(1, 0.55, this.tuck);
     let swinging = 0; for (const l of L) if (!l.planted) swinging++;
     const liftH = 9 * s * lerp(1, 0.55, this.crouch) * lerp(1, 0.6, this.tuck);
     const speedK = clamp(this.speed / (110 * s + 20), 0, 1);
     for (let i = 0; i < N; i++) {
-      const leg = L[i]; let dp = dph[i];
-      dp = leg.planted ? Math.max(0, dp) : Math.max(dp, minSwing);
-      const prev = leg.phase; leg.phase += dp * dt;
+      const leg = L[i], prev = leg.phase;
+      leg.phase = thetaToPhi(leg.th);
       leg.flash = Math.max(0, leg.flash - dt * 2.5);
       if (leg.planted) {
         const r = this.restWorld(leg, tmpA, this.pos.x, this.pos.y, this.heading);
         const dev = Math.hypot(leg.foot.x - r.x, leg.foot.y - r.y);
         if (prev < STANCE && leg.phase >= STANCE) { this.liftOff(leg); swinging++; }
         else if (dev > thr) {
-          if (this.neighborsPlanted(i) || dev > thr * 1.45) { leg.phase = STANCE; this.liftOff(leg); swinging++; }
+          // sensory feedback: an over-stretched leg resets its own oscillator into swing
+          if (this.neighborsPlanted(i) || dev > thr * 1.45) { this.liftOff(leg); swinging++; }
         } else if (f < 0.2 && dev > thr * 0.3 && swinging === 0 && this.settleCD <= 0 && this.neighborsPlanted(i)) {
           this.liftOff(leg); swinging++; this.settleCD = 0.08;
         }
-        if (leg.phase >= 1) leg.phase -= 1;
       }
       if (!leg.planted) {
-        const rate = Math.max(dp, minSwing);
         // low-pass the predicted foothold so abrupt heading/velocity changes never jerk the swinging foot
-        this.predictFoothold(leg, rate, tmpB); const ka = 1 - Math.exp(-dt * 14);
+        this.predictFoothold(leg, this.cpgSwingRate, tmpB); const ka = 1 - Math.exp(-dt * 14);
         leg.tgt.x += (tmpB.x - leg.tgt.x) * ka; leg.tgt.y += (tmpB.y - leg.tgt.y) * ka;
-        if (leg.phase >= 1) {
-          leg.phase -= 1; if (leg.phase >= STANCE) leg.phase = 0;
+        if (leg.phase < STANCE) {   // oscillator crossed 2PI: touchdown
           leg.planted = true; leg.foot.x = leg.tgt.x; leg.foot.y = leg.tgt.y; leg.lift = 0; leg.flash = 1;
           Snd.step(clamp(leg.side * 0.35 + panOf(leg.foot.x) * 0.6, -1, 1), s, this.crouch, speedK);
         } else {
@@ -1330,6 +1367,8 @@ const $ = id => document.getElementById(id);
 function setTool(t) { world.tool = t; document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t)); cvs.style.cursor = t === 'pet' ? 'grab' : t === 'observe' ? 'default' : 'crosshair'; }
 document.querySelectorAll('[data-tool]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
 function toggleNight() { world.night = !world.night; $('night').classList.toggle('on', world.night); }
+function toggleCPG() { world.cpg = !world.cpg; $('cpg').classList.toggle('on', world.cpg); }
+$('cpg').onclick = toggleCPG;
 function toggleSenses() { world.senses = !world.senses; $('senses').classList.toggle('on', world.senses); }
 function toggleMute() { Snd.init(); Snd.setMuted(!Snd.muted); $('mute').innerHTML = '<kbd>M</kbd>' + (Snd.muted ? 'Muted' : 'Sound on'); $('mute').classList.toggle('on', Snd.muted); }
 $('night').onclick = toggleNight; $('senses').onclick = toggleSenses; $('mute').onclick = toggleMute;
@@ -1339,7 +1378,7 @@ addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
   if (k === '1') setTool('observe'); else if (k === '2') setTool('prey'); else if (k === '3') setTool('mist'); else if (k === '4') setTool('pet');
-  else if (k === 'n') toggleNight(); else if (k === 's') toggleSenses(); else if (k === 'm') toggleMute();
+  else if (k === 'c') toggleCPG(); else if (k === 'n') toggleNight(); else if (k === 's') toggleSenses(); else if (k === 'm') toggleMute();
 });
 document.addEventListener('pointerdown', () => Snd.init(), {capture: true});
 
@@ -1461,6 +1500,54 @@ function drawSenses(c) {
   if (s.cover && (s.state === 'EVADE' || s.state === 'AMBUSH_COVER')) { c.strokeStyle = 'rgba(140,200,160,0.35)'; c.beginPath(); c.rect(s.cover.x - 4, s.cover.y - 4, 8, 8); c.stroke(); }
 }
 
+// ---- live Central Pattern Generator network panel
+function drawCPG(c) {
+  const sp = spider, L = sp.legs, small = W < 700, k = small ? 0.72 : 1;
+  const pw = 176 * k, ph = 262 * k, px = W - pw - 12, py = small ? 12 : H - ph - 64;
+  c.save(); c.translate(px, py); c.scale(k, k);
+  c.fillStyle = 'rgba(3,4,8,0.88)'; c.strokeStyle = '#1e2731'; c.lineWidth = 1;
+  c.beginPath(); c.rect(0.5, 0.5, 175, 261); c.fill(); c.stroke();
+  c.fillStyle = '#6b7987'; c.font = '10px ui-monospace,Menlo,Consolas,monospace'; c.fillText('CENTRAL PATTERN GENERATOR', 10, 16);
+  // node layout: legs L1..L4 left column, R1..R4 right column; head at top
+  const NX = i => i < 4 ? 62 : 114, NY = i => 50 + (i % 4) * 46, R = 12;
+  const act = clamp(sp.cpgK / 3.2, 0, 1);
+  // links: curved arcs, brightness = coupling drive, lens-shaped double arcs for ipsi/contra like a neural ladder
+  for (const ln of CPG_LINKS) {
+    const ax = NX(ln.a), ay = NY(ln.a), bx = NX(ln.b), by = NY(ln.b);
+    const al = (0.28 + 0.5 * act * Math.min(1, 0.4 + ln.err)) * (ln.kind === 'long' ? 0.75 : 1);
+    c.strokeStyle = `rgba(52,52,255,${al.toFixed(3)})`; c.lineWidth = ln.kind === 'diag' ? 1 : 1.3;
+    const mx = (ax + bx) / 2, my = (ay + by) / 2;
+    c.beginPath();
+    if (ln.kind === 'long') { const o = ln.a < 4 ? -34 : 34; c.moveTo(ax, ay); c.quadraticCurveTo(mx + o, my, bx, by); }
+    else if (ln.kind === 'diag') { c.moveTo(ax, ay); c.quadraticCurveTo(mx, my + 8, bx, by); }
+    else { const vx = -(by - ay) * 0.12, vy = (bx - ax) * 0.12; c.moveTo(ax, ay); c.quadraticCurveTo(mx + vx, my + vy, bx, by); c.moveTo(ax, ay); c.quadraticCurveTo(mx - vx, my - vy, bx, by); }
+    c.stroke();
+  }
+  // signal pulses travelling along each link, timed by the source oscillator's phase
+  c.fillStyle = 'rgba(255,176,46,0.85)'; c.beginPath();
+  for (const ln of CPG_LINKS) {
+    if (ln.kind === 'long') continue;
+    const ax = NX(ln.a), ay = NY(ln.a), bx = NX(ln.b), by = NY(ln.b), t = (((L[ln.a].th / TAU) % 1) + 1) % 1;
+    const cx = (ax + bx) / 2 + (ln.kind === 'diag' ? 0 : -(by - ay) * 0.12), cy = (ay + by) / 2 + (ln.kind === 'diag' ? 8 : (bx - ax) * 0.12);
+    const u = 1 - t, x = u * u * ax + 2 * u * t * cx + t * t * bx, y = u * u * ay + 2 * u * t * cy + t * t * by;
+    c.moveTo(x + 1.8, y); c.arc(x, y, 1.8, 0, TAU);
+  }
+  c.fill();
+  // oscillator nodes: ring = limit cycle, orange dot = live (x, y) state; filled when the leg is in stance
+  for (let i = 0; i < 8; i++) {
+    const l = L[i], x = NX(i), y = NY(i);
+    if (l.planted) { c.fillStyle = 'rgba(255,59,48,0.16)'; c.beginPath(); c.arc(x, y, R, 0, TAU); c.fill(); }
+    c.strokeStyle = l.planted ? '#ff3b30' : 'rgba(255,59,48,0.55)'; c.lineWidth = 1.4; c.beginPath(); c.arc(x, y, R, 0, TAU); c.stroke();
+    c.strokeStyle = 'rgba(255,59,48,0.25)'; c.lineWidth = 1; c.beginPath(); c.moveTo(x - R, y); c.lineTo(x + R, y); c.stroke();
+    c.fillStyle = '#ffb02e'; c.beginPath(); c.arc(x + l.ox * R, y + l.oy * R, 3.2, 0, TAU); c.fill();
+    c.fillStyle = '#6b7987'; c.fillText(LEG_NAMES[i], i < 4 ? x - 38 : x + 18, y + 3);
+  }
+  c.fillStyle = '#8f9cab';
+  c.fillText('drive ' + sp.gaitF.toFixed(2) + ' Hz  duty ' + STANCE.toFixed(2), 10, 236);
+  c.fillText('coupling ' + (act * 100 | 0) + '%  sync R ' + sp.cpgSync.toFixed(2), 10, 250);
+  c.restore();
+}
+
 function render() {
   const c = ctx;
   c.setTransform(1, 0, 0, 1, 0, 0);
@@ -1497,6 +1584,7 @@ function render() {
     c.fillText(p.t, p.x, p.y);
   }
   c.globalAlpha = 1; c.textAlign = 'start';
+  if (world.cpg) drawCPG(c);
   // pet cursor ring
   if (world.tool === 'pet' && input.inside) { c.strokeStyle = input.petting ? 'rgba(215,127,180,0.7)' : 'rgba(215,127,180,0.3)'; c.lineWidth = 1; c.beginPath(); c.arc(input.x, input.y, 12, 0, TAU); c.stroke(); }
 }
