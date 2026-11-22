@@ -41,14 +41,15 @@ button kbd{color:var(--dim);font:inherit;margin-right:4px}
     <div class="row"><span class="k">hydration</span><span id="vt"></span></div><div class="bar"><i id="bt" style="background:var(--water)"></i></div>
     <div class="row"><span class="k">energy</span><span id="ve"></span></div><div class="bar"><i id="be" style="background:#9aa7b4"></i></div>
     <div class="row"><span class="k">bond</span><span id="vb"></span></div><div class="bar"><i id="bb" style="background:var(--bond)"></i></div>
-    <div class="row"><span class="k">molt xp</span><span id="vx"></span></div><div class="bar"><i id="bx" style="background:var(--acc)"></i></div>
+    <div class="row"><span class="k">growth</span><span id="vx"></span></div><div class="bar"><i id="bx" style="background:var(--acc)"></i></div>
     <div class="row"><span class="k" id="age"></span><span class="k" id="fps"></span></div>
   </div>
 </div>
 <div id="tip"><b>Care guide</b><br>
-<b>1 Observe</b> – rest the cursor near her to be greeted by her pedipalps; flick it fast and she bolts for cover.<br>
+Your spider hatches from an egg sac (hold <b>Pet</b> on it to warm it) and grows over real days: each molt needs time <i>and</i> meals.<br>
+<b>1 Observe</b> – rest the cursor near your spider to be greeted by its pedipalps; flick it fast and it bolts for cover.<br>
 <b>2 Prey</b> – click to drop a fly. <b>3 Mist</b> – click to spray water droplets.<br>
-<b>4 Pet</b> – press and hold on her body.<br>
+<b>4 Pet</b> – press and hold on its body.<br>
 <b>N</b> night · <b>S</b> senses overlay · <b>C</b> CPG network · <b>B</b> brain · <b>M</b> sound. Audio unlocks on first click.</div>
 <div id="tb">
   <button data-tool="observe" class="on"><kbd>1</kbd>Observe</button>
@@ -61,7 +62,7 @@ button kbd{color:var(--dim);font:inherit;margin-right:4px}
   <button id="cpg" class="on"><kbd>C</kbd>CPG</button>
   <button id="brainb" class="on"><kbd>B</kbd>Brain</button>
   <button id="mute"><kbd>M</kbd>Sound on</button>
-  <button id="reset">Reset</button>
+  <button id="reset">New egg</button>
 </div>
 <script>
 'use strict';
@@ -85,12 +86,23 @@ const PALP_SEG = [3, 3, 8, 3.5, 5, 5.5];
 const PALP_Z   = [9, 10, 12, 10, 6, 3];
 const PALP_LIFT = [0, 0.05, 0.2, 0.4, 0.65, 0.85, 1];
 const PALP_W   = [2.0, 1.8, 1.9, 1.7, 1.6, 1.9];
+// Real-time life cycle: each instar needs BOTH real hours and meals before the next molt (~5+ days to adulthood)
 const STAGES = [
-  {name:'Instar I · Spiderling', scale:0.48, xp:60},
-  {name:'Instar III · Juvenile', scale:0.72, xp:150},
-  {name:'Instar V · Sub-Adult',  scale:0.90, xp:280},
-  {name:'Mature Adult',          scale:1.05, xp:Infinity},
+  {name: 'Instar I · Spiderling',  scale: 0.40, hours: 10, meals: 3},
+  {name: 'Instar II · Spiderling', scale: 0.50, hours: 14, meals: 3},
+  {name: 'Instar III · Juvenile',  scale: 0.60, hours: 18, meals: 4},
+  {name: 'Instar IV · Juvenile',   scale: 0.70, hours: 22, meals: 4},
+  {name: 'Instar V · Juvenile',    scale: 0.80, hours: 26, meals: 5},
+  {name: 'Instar VI · Sub-Adult',  scale: 0.92, hours: 30, meals: 6},
+  {name: 'Mature Adult',           scale: 1.05, hours: Infinity, meals: Infinity},
 ];
+const ADULT = STAGES.length - 1;
+const HOUR = 3600e3, EGG_MS = 120e3, EXUVIA_MS = 3 * HOUR, PREMOLT = 0.85, MOLT_SHED = 5, MOLT_END = 14;
+// ?timescale=3600 runs the life-cycle clock 3600x faster (for previewing growth)
+const TIMESCALE = Math.max(1, +(new URLSearchParams(location.search).get('timescale')) || 1);
+let clockSkew = 0; const gameNow = () => Date.now() + clockSkew;
+function fmtDur(ms) { ms = Math.max(0, ms); const m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  return d ? `${d}d ${h % 24}h` : h ? `${h}h ${m % 60}m` : `${m}m ${Math.floor(ms / 1000) % 60}s`; }
 const STATE_PARAMS = {
   PATROL:          {v:70,  st:.38, ht:.24, cr:0,   palp:'rest'},
   INVESTIGATE:     {v:46,  st:.42, ht:.22, cr:.15, palp:'tap'},
@@ -345,7 +357,7 @@ const panOf = x => clamp((x / W) * 2 - 1, -1, 1) * 0.8;
 
 // ============================================================ world
 const world = {
-  time: 0, flies: [], drops: [], exuviae: [], parts: [], night: false, senses: true, cpg: true, brain: true, tool: 'observe', spawnT: 4,
+  time: 0, flies: [], drops: [], exuviae: [], parts: [], egg: null, night: false, senses: true, cpg: true, brain: true, tool: 'observe', spawnT: 4,
   danger: new Float32Array(GW * GH), yield: new Float32Array(GW * GH),
 };
 const input = {x: -9999, y: -9999, vx: 0, vy: 0, speed: 0, inside: false, down: false, still: 0, lastT: 0, lastMove: 0, petting: false};
@@ -597,12 +609,33 @@ const Brain = {
 };
 Brain.init();
 
+// ============================================================ GENOME: every hatchling is different
+const SYL = ['ar', 'ka', 'ne', 'ly', 'so', 'ri', 'ta', 'vo', 'mi', 'ze', 'lu', 'qua', 'pe', 'ro', 'xi', 'da', 'ni', 'sha', 'th', 'or'];
+const MORPHS = [ // name, weight, hue, saturation, lightness
+  ['brown', 55, 28, 0.27, 0.18], ['grey', 20, 210, 0.07, 0.19], ['rust', 15, 14, 0.42, 0.19], ['sand', 10, 36, 0.30, 0.26]];
+function makeGenome() {
+  const g = (m, sd, lo, hi) => clamp(m + randn() * sd, lo, hi), pick = a => a[Math.random() * a.length | 0];
+  let name = pick(SYL) + pick(SYL) + (Math.random() < 0.5 ? pick(SYL) : ''); name = name[0].toUpperCase() + name.slice(1);
+  let w = Math.random() * 100, m = MORPHS[0]; for (const mm of MORPHS) { if (w < mm[1]) { m = mm; break; } w -= mm[1]; }
+  return {name, sex: Math.random() < 0.5 ? 'female' : 'male', morph: m[0],
+    hue: m[2] + g(0, 4, -10, 10), sat: g(m[3], 0.04, 0.03, 0.6), lit: g(m[4], 0.02, 0.12, 0.32), contrast: g(1, 0.15, 0.7, 1.35),
+    size: g(1, 0.06, 0.88, 1.14), leg: g(1, 0.05, 0.9, 1.12), eye: g(1, 0.08, 0.85, 1.2), abd: g(1, 0.07, 0.85, 1.18), speed: g(1, 0.06, 0.88, 1.12),
+    chevrons: 3 + (Math.random() * 3 | 0),
+    traits: {bold: g(0.5, 0.13, 0.15, 0.85), curious: g(0.5, 0.13, 0.15, 0.85), active: g(0.5, 0.13, 0.15, 0.85), affection: g(0.5, 0.13, 0.15, 0.85)}};
+}
+function hsl2hex(h, s2, l) {
+  h = ((h % 360) + 360) % 360; s2 = clamp(s2, 0, 1); l = clamp(l, 0, 1);
+  const k = n => (n + h / 30) % 12, a = s2 * Math.min(l, 1 - l), f = n => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+  return '#' + [f(0), f(8), f(4)].map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('');
+}
+
 // ============================================================ spider
 const tmpA = {x: 0, y: 0}, tmpB = {x: 0, y: 0}, tmpC = {x: 0, y: 0};
 class Spider {
   constructor() {
     this.pos = {x: 0, y: 0}; this.vel = {x: 0, y: 0}; this.heading = -PI / 2; this.hv = {v: 0}; this.angVel = 0; this.speed = 0;
-    this.stage = 0; this.scale = STAGES[0].scale; this.xp = 0;
+    this.stage = 0; this.scale = STAGES[0].scale; this.genome = null; this.bornAt = 0; this.stageStart = 0; this.meals = 0;
+    this.premolt = false; this.premoltK = 0; this.legX = 1;
     this.hunger = 0.45; this.thirst = 0.3; this.energy = 0.9; this.bond = 0.2; this.age = 0; this.fresh = 0;
     this.crouch = 0; this.crouchT = 0; this.crouchV = {v: 0}; this.tuck = 0;
     this.fang = 0; this.fangT = 0; this.abdW = this.heading; this.abdV = 0; this.bob = rnd(0, 9);
@@ -628,12 +661,28 @@ class Spider {
     this.colors = null; this.colorFresh = -1;
     this.eyeW = [];
   }
+  // ---------- genome & growth
+  applyGenome(g) { this.genome = g; this.refreshLimbs(); this.colors = null; }
+  isMale() { return this.genome && this.genome.sex === 'male'; }
+  targetScale() { return STAGES[this.stage].scale * (this.genome ? this.genome.size : 1); }
+  refreshLimbs() {
+    const g = this.genome || {leg: 1};
+    this.legX = g.leg * (this.isMale() && this.stage === ADULT ? 1.08 : 1);   // adult males are leggier
+    for (const L of this.legs) { const mul = LEG_LEN_MUL[L.idx] * this.legX; L.seg = LEG_SEG.map(l => l * mul); L.total = LEG_SEG.reduce((a, b) => a + b, 0) * mul; }
+  }
+  moltInfo(now) {
+    if (this.stage >= ADULT) return null;
+    const st = STAGES[this.stage], hrs = (now - this.stageStart) / HOUR;
+    return {hrs, need: st.hours, meals: this.meals, mealsNeed: st.meals, left: Math.max(0, st.hours * HOUR - (now - this.stageStart)),
+      ready: hrs >= st.hours && this.meals >= st.meals, premolt: this.meals >= st.meals && hrs >= st.hours * PREMOLT};
+  }
+
   // ---------- frames
   toWorld(bx, by, out) { out.x = this.cx + bx * this.cs - by * this.sn; out.y = this.cy + bx * this.sn + by * this.cs; return out; }
   toLocal(wx, wy, out) { const dx = wx - this.cx, dy = wy - this.cy; out.x = dx * this.cs + dy * this.sn; out.y = -dx * this.sn + dy * this.cs; return out; }
   headPt(out) { const k = 20 * this.scale; out.x = this.pos.x + Math.cos(this.heading) * k; out.y = this.pos.y + Math.sin(this.heading) * k; return out; }
   bodyR() { return 14 * this.scale; }
-  speedMul() { return (0.5 + 0.5 * this.scale) * (0.6 + 0.4 * this.energy) * (0.85 + 0.3 * Brain.traits.active); }
+  speedMul() { return (0.5 + 0.5 * this.scale) * (0.6 + 0.4 * this.energy) * (0.85 + 0.3 * Brain.traits.active) * (this.genome ? this.genome.speed : 1) * (1 - 0.35 * this.fresh); }
   lungeR() { return 70 * this.scale + 26; }
   restLocal(leg, out) {
     const a = REST_ANG[leg.idx], tuckMul = lerp(1, 0.34, this.tuck) * lerp(1, 1.06, this.crouch);
@@ -666,7 +715,8 @@ class Spider {
     if (sleeping && world.night) Brain.nudge('active', dt * 0.0012);
     for (const k in Brain.drift) Brain.drift[k] *= Math.exp(-dt / 4);
     this.bond = clamp(this.bond - dt / 900, 0, 1);
-    this.fresh = Math.max(0, this.fresh - dt / 30);
+    this.fresh = Math.max(0, this.fresh - dt / 1200);   // new exoskeleton hardens over ~20 minutes
+    this.premoltK += ((this.premolt ? 1 : 0) - this.premoltK) * Math.min(1, dt * 0.5);
     this.lungeCD -= dt; this.settleCD -= dt;
   }
 
@@ -804,7 +854,8 @@ class Spider {
     if (st === 'EVADE') { if (!this.threat && this.stateT > 2.6 * (1.5 - Brain.traits.bold)) this.enter(world.night ? 'SLEEP' : 'PATROL'); return; }
     if (this.utilT > 0) return;
     this.utilT = 0.12;
-    if (this.stage < 3 && this.xp >= STAGES[this.stage].xp && !this.tVis && !world.night) { this.enter('MOLT'); return; }
+    const mi = this.moltInfo(gameNow()); this.premolt = !!(mi && mi.premolt);
+    if (mi && mi.ready && !this.tVis && st !== 'FEED') { Brain.abandon(); this.enter('MOLT'); return; }
     if (input.petting) { this.enter('GREET'); return; }
     if (st === 'GREET') { this.enter('PATROL'); return; }
     if (world.night || this.energy < 0.1 || (st === 'SLEEP' && this.sleepLow && this.energy < 0.6)) {
@@ -816,7 +867,7 @@ class Spider {
     // ---- utilities
     const T = this.target;
     const drop = this.nearestDrop();
-    const hungry = this.hunger > 0.16;
+    const hungry = this.hunger > 0.16 && !this.premolt && this.fresh < 0.6;   // fasts before a molt & while soft
     const uHunt = T && hungry && (this.tVis || world.time - this.lastSeen < 0.6) ? 0.3 + this.hunger : 0;
     const uDrink = drop && this.thirst > 0.28 ? this.thirst * 1.3 : 0;
     const uInv = (this.stim && hungry ? 0.45 : (this.lkp && hungry ? 0.4 + this.hunger * 0.3 : (T && this.tVis && hungry ? 0.5 : 0))) * (0.6 + 0.8 * Brain.traits.curious);
@@ -872,9 +923,9 @@ class Spider {
   finishFeed() {
     if (this.feedKind === 'prey' && this.prey) {
       this.prey.dead = true; this.prey = null;
-      this.hunger = clamp(this.hunger - 0.5, 0, 1); this.xp += 24; this.bond = clamp(this.bond + 0.02, 0, 1);
+      this.hunger = clamp(this.hunger - 0.5, 0, 1); this.meals++; this.bond = clamp(this.bond + 0.02, 0, 1);
     } else if (this.feedKind === 'water') {
-      this.xp += 6; Brain.nudge('active', 0.01);
+      Brain.nudge('active', 0.01);
     }
     this.feedKind = null; this.fangT = 0;
     this.enter('PATROL'); this.pause = rnd(1, 2.5);
@@ -891,6 +942,11 @@ class Spider {
     if (st !== 'LUNGE' && st !== 'FEED') this.fangT = 0;
     switch (st) {
       case 'PATROL': {
+        if (this.premolt) {   // premolt: hides by a rock and stays still
+          if (!this.cover) this.cover = this.coverPoint({x: arena.x + arena.w / 2, y: arena.y + arena.h / 2}, {x: 0, y: 0}) || {x: this.pos.x, y: this.pos.y};
+          if (Math.hypot(this.cover.x - this.pos.x, this.cover.y - this.pos.y) > 8) setGoal(this.cover.x, this.cover.y);
+          this.crouchT = 0.45; this.palpMode = 'tuck'; this.sub = 'premolt · hiding'; v *= 0.6; break;
+        }
         if (this.friend) {
           setFace(input.x, input.y); this.palpMode = 'reach'; this.bond = clamp(this.bond + dt * 0.006, 0, 1); this.sub = 'curious';
           Brain.nudge('affection', dt * 0.0015); Brain.nudge('curious', dt * 0.0008);
@@ -1013,7 +1069,7 @@ class Spider {
         break;
       }
       case 'GREET': {
-        setFace(input.x, input.y); this.bond = clamp(this.bond + dt * 0.05 * (0.5 + Brain.traits.affection), 0, 1); this.xp += dt * 1.2;
+        setFace(input.x, input.y); this.bond = clamp(this.bond + dt * 0.05 * (0.5 + Brain.traits.affection), 0, 1);
         Brain.nudge('affection', dt * 0.006); Brain.nudge('bold', dt * 0.002);
         this.chirpT -= dt;
         if (this.chirpT <= 0) { this.chirpT = 1.2 - 0.6 * Brain.traits.affection; Snd.chirp(1150 + this.bond * 500, 0, 0.06); world.parts.push({x: this.pos.x + rnd(-8, 8), y: this.pos.y - 20 * s, vy: -22, life: 1.4, t: '♥'}); }
@@ -1028,24 +1084,24 @@ class Spider {
       }
       case 'MOLT': {
         this.moltT += dt; const t = this.moltT;
-        this.sub = (t / 3 * 100 | 0) + '%';
-        if (Math.random() < dt * (t < 1.2 ? 18 : 9)) Snd.crackle();
-        if (t > 1.2 && !this.moltDone) { this.moltDone = true; this.makeExuvia(); this.fresh = 1; }
-        if (t > 1.2) {
-          const ns = STAGES[Math.min(3, this.stage + 1)].scale;
-          this.scale = lerp(this.moltFrom, ns, smooth01((t - 1.2) / 1.8));
-          setGoal(this.pos.x + Math.cos(this.heading) * 30, this.pos.y + Math.sin(this.heading) * 30);
+        this.sub = (t < MOLT_SHED ? 'splitting ' : 'emerging ') + (t / MOLT_END * 100 | 0) + '%';
+        if (Math.random() < dt * (t < MOLT_SHED ? 14 : 6)) Snd.crackle();
+        if (t > MOLT_SHED && !this.moltDone) { this.moltDone = true; this.makeExuvia(); this.fresh = 1; }
+        if (t > MOLT_SHED) {
+          const ns = STAGES[Math.min(ADULT, this.stage + 1)].scale * (this.genome ? this.genome.size : 1);
+          this.scale = lerp(this.moltFrom, ns, smooth01((t - MOLT_SHED) / (MOLT_END - MOLT_SHED)));
+          setGoal(this.pos.x + Math.cos(this.heading) * 30, this.pos.y + Math.sin(this.heading) * 30); v = 6;
           this.crouchT = 0.1;
         }
-        if (t >= 3) {
-          this.stage = Math.min(3, this.stage + 1); this.scale = STAGES[this.stage].scale; this.xp = 0;
+        if (t >= MOLT_END) {
+          this.stage = Math.min(ADULT, this.stage + 1); this.scale = this.targetScale(); this.meals = 0; this.stageStart = gameNow(); this.premolt = false; this.refreshLimbs();
           Snd.stageUp(); world.parts.push({x: this.pos.x, y: this.pos.y - 30 * this.scale, vy: -16, life: 2.2, t: STAGES[this.stage].name, big: true});
           save(); this.enter('PATROL');
         }
         break;
       }
     }
-    if (this.state !== 'MOLT') this.scale += (STAGES[this.stage].scale - this.scale) * Math.min(1, dt * 2);
+    if (this.state !== 'MOLT') this.scale += (this.targetScale() - this.scale) * Math.min(1, dt * (this.scale < this.targetScale() * 0.8 ? 0.6 : 2));
     this.desSpeed = v * this.speedMul();
   }
 
@@ -1113,7 +1169,7 @@ class Spider {
     let hd = this.heading;
     if (this.face && (this.faceAlways || this.speed < 30 * s + 10)) hd = Math.atan2(this.face.y - p.y, this.face.x - p.x);
     else if (this.speed > 6) hd = Math.atan2(this.vel.y, this.vel.x);
-    if (this.state === 'MOLT' && this.moltT < 1.2) hd = this.heading + Math.sin(world.time * 40) * 0.01;
+    if (this.state === 'MOLT' && this.moltT < MOLT_SHED) hd = this.heading + Math.sin(world.time * 40) * 0.01;
     const prev = this.heading;
     this.heading = smoothDampAngle(this.heading, hd, this.hv, this.headT, 14, dt);
     const av = angDiff(prev, this.heading) / dt;
@@ -1223,7 +1279,7 @@ class Spider {
     this.bob += dt * (this.state === 'SLEEP' ? 0.9 : 1.7);
     this.fang += (this.fangT - this.fang) * Math.min(1, dt * (this.fangT > this.fang ? 22 : 8));
     let liftSum = 0; for (const l of this.legs) liftSum += l.lift;
-    const molt = this.state === 'MOLT' && this.moltT < 1.2 ? Math.sin(world.time * 55) * 0.5 * s : 0;
+    const molt = this.state === 'MOLT' && this.moltT < MOLT_SHED ? Math.sin(world.time * 55) * 0.5 * s : 0;
     this.zc = 10 * s * (1 - 0.42 * this.crouch) * (1 - 0.5 * this.tuck) + Math.sin(this.bob) * 0.45 * s + liftSum * 0.035 + molt;
     // planted-foot centroid suspension
     const c = Math.cos(this.heading), sn = Math.sin(this.heading);
@@ -1325,27 +1381,29 @@ class Spider {
 
   makeExuvia() {
     const s = this.scale, legs = this.legs.map(L => L.R.map(p => [Math.round(p.x - this.pos.x), Math.round(p.y - this.pos.y)]));
-    world.exuviae.push({u: (this.pos.x - arena.x) / arena.w, v: (this.pos.y - arena.y) / arena.h, h: +this.heading.toFixed(3), s: +s.toFixed(3), a: +angDiff(this.heading, this.abdW).toFixed(3), legs});
+    world.exuviae.push({u: (this.pos.x - arena.x) / arena.w, v: (this.pos.y - arena.y) / arena.h, h: +this.heading.toFixed(3), s: +s.toFixed(3), a: +angDiff(this.heading, this.abdW).toFixed(3), legs, born: gameNow()});
     if (world.exuviae.length > 8) world.exuviae.shift();
     save();
   }
 
   // ---------- rendering
   palette() {
-    const f = this.fresh;
-    if (this.colors && Math.abs(this.colorFresh - f) < 0.01) return this.colors;
+    const f = this.fresh, pk = Math.round(this.premoltK * 20) / 20;
+    if (this.colors && Math.abs(this.colorFresh - f) < 0.01 && this.colorPK === pk) return this.colors;
     const mix = (a, b) => {
       const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
       const r = Math.round(lerp(pa >> 16, pb >> 16, f)), g = Math.round(lerp(pa >> 8 & 255, pb >> 8 & 255, f)), bl = Math.round(lerp(pa & 255, pb & 255, f));
       return `rgb(${r},${g},${bl})`;
     };
+    const G = this.genome || {hue: 28, sat: 0.27, lit: 0.18, contrast: 1}, h = G.hue, sa = G.sat, L = G.lit * (1 - 0.28 * pk), ct = G.contrast;
+    const c = (sm, lm, cap) => hsl2hex(h, sa * sm, Math.min(cap || 0.8, L * lm));
     const P = '#d8c7a5';
     this.colors = {
-      cara: mix('#3a2d22', P), rim: mix('#17110d', '#8f806a'), band: mix('#8c7253', '#efe3cc'), groove: 'rgba(10,7,5,0.55)',
-      legA: mix('#463729', P), legB: mix('#7d6549', '#efe3cc'), out: mix('#120d0a', '#6b5f4f'), node: mix('#9a7f5d', '#f4ead6'),
-      abd: mix('#2f241b', P), chev: mix('#9a7d5a', '#f2e6cf'), cheli: mix('#241a13', '#a8987e'), fang: mix('#0b0806', '#5a4c3c'),
+      cara: mix(c(1, 1), P), rim: mix(c(0.8, 0.42), '#8f806a'), band: mix(c(0.9, 2.4 * ct, 0.75), '#efe3cc'), groove: 'rgba(10,7,5,0.55)',
+      legA: mix(c(1, 1.15), P), legB: mix(c(0.9, 2.1 * ct, 0.7), '#efe3cc'), out: mix(c(0.6, 0.32), '#6b5f4f'), node: mix(c(0.8, 2.6, 0.78), '#f4ead6'),
+      abd: mix(c(1, 0.88), P), chev: mix(c(0.85, 2.6 * ct, 0.8), '#f2e6cf'), cheli: mix(c(0.8, 0.62), '#a8987e'), fang: mix(c(0.3, 0.2), '#5a4c3c'),
     };
-    this.colorFresh = f; return this.colors;
+    this.colorFresh = f; this.colorPK = pk; return this.colors;
   }
   drawLimb(c, limb, widths, C, s, isLeg) {
     const R = limb.R, Z = limb.Z, n = limb.n;
@@ -1403,11 +1461,17 @@ class Spider {
     // legs: rear pairs first
     for (const i of [3, 7, 2, 6, 1, 5, 0, 4]) this.drawLimb(c, this.legs[i], LEG_W, C, s, true);
     for (const p of this.palps) this.drawLimb(c, p, PALP_W, C, s, false);
+    if (this.isMale() && this.stage >= ADULT - 1) {   // male palpal bulbs: swelling at sub-adult, full at maturity
+      const br = (this.stage === ADULT ? 2.7 : 1.6) * s + 0.4; c.fillStyle = C.rim; c.strokeStyle = C.node; c.lineWidth = 0.7;
+      for (const p of this.palps) { const t = p.R[p.n - 1], z = p.Z[p.n - 1]; c.beginPath(); c.ellipse(t.x, t.y - z, br, br * 0.8, this.heading, 0, TAU); c.fill(); c.stroke(); }
+    }
     // body in local frame
     c.save(); c.translate(X, Y); c.rotate(this.heading); c.scale(s, s);
     // abdomen (opisthosoma) on angular spring
     c.save(); c.translate(-12.5, 0); c.rotate(angDiff(this.heading, this.abdW) + Math.sin(this.bob * 3.1) * 0.015);
-    const bw = (1 + 0.03 * Math.sin(this.bob)) * (0.9 + 0.2 * (1 - this.hunger));
+    const G = this.genome || {abd: 1, chevrons: 4, eye: 1};
+    const sexAbd = this.stage === ADULT ? (this.isMale() ? 0.82 : 1.15) : 1;
+    const bw = (1 + 0.03 * Math.sin(this.bob)) * (0.9 + 0.2 * (1 - this.hunger)) * G.abd * sexAbd;
     c.fillStyle = C.abd; c.strokeStyle = C.rim; c.lineWidth = 1.1;
     c.beginPath(); c.moveTo(-1, 0);
     c.bezierCurveTo(-2, -8 * bw, -13, -11 * bw, -21, -9.5 * bw);
@@ -1417,7 +1481,7 @@ class Spider {
     c.fill(); c.stroke();
     c.strokeStyle = C.chev; c.lineWidth = 1.2; c.beginPath();
     c.moveTo(-4, 0); c.lineTo(-12, 0);
-    for (let k = 0; k < 4; k++) { const x = -15 - k * 4.4, w = (4.8 - k * 0.8) * bw; c.moveTo(x + 2.6, -w); c.lineTo(x, 0); c.lineTo(x + 2.6, w); }
+    for (let k = 0; k < G.chevrons; k++) { const x = -15 - k * (17 / G.chevrons), w = (4.8 - k * (3.2 / G.chevrons)) * bw; c.moveTo(x + 2.6, -w); c.lineTo(x, 0); c.lineTo(x + 2.6, w); }
     c.stroke();
     c.fillStyle = C.chev; c.globalAlpha = 0.35; c.beginPath(); c.ellipse(-8, 0, 4.5, 1.8, 0, 0, TAU); c.fill(); c.globalAlpha = 1;
     c.fillStyle = C.rim; c.beginPath(); c.ellipse(-34.5, -1.3, 1.6, 1, 0.3, 0, TAU); c.ellipse(-34.5, 1.3, 1.6, 1, -0.3, 0, TAU); c.ellipse(-35.3, 0, 1.2, .7, 0, 0, TAU); c.fill();
@@ -1451,7 +1515,7 @@ class Spider {
     // ocular tubercle
     c.fillStyle = C.rim; c.globalAlpha = 0.6; c.beginPath(); c.ellipse(10.2, 0, 4.4, 6.6, 0, 0, TAU); c.fill(); c.globalAlpha = 1;
     // 8 eyes: AME (large), ALE, PME, PLE
-    const ek = Math.pow(s, -0.35);
+    const ek = Math.pow(s, -0.35) * G.eye;
     const EYES = [[12.6, 2.0, 2.0], [12.1, 4.4, 1.0], [8.7, 3.3, 1.65], [6.2, 5.6, 1.3]];
     const hx = Math.cos(-this.heading) * -0.32 - Math.sin(-this.heading) * -0.36, hy = Math.sin(-this.heading) * -0.32 + Math.cos(-this.heading) * -0.36;
     c.fillStyle = '#05070a'; c.beginPath();
@@ -1479,6 +1543,8 @@ class Spider {
 }
 
 function drawExuvia(c, e) {
+  const fade = 1 - (gameNow() - (e.born || 0)) / EXUVIA_MS; if (fade <= 0) return;
+  c.globalAlpha = Math.min(1, fade * 1.5);
   const x = arena.x + e.u * arena.w, y = arena.y + e.v * arena.h, s = e.s;
   c.strokeStyle = 'rgba(205,186,150,0.30)'; c.lineWidth = 1.4 * s + 0.4; c.lineCap = 'round'; c.lineJoin = 'round';
   c.beginPath();
@@ -1492,34 +1558,99 @@ function drawExuvia(c, e) {
   c.beginPath(); c.moveTo(-3, 0); c.lineTo(-12, 0); c.stroke();
   c.restore();
   c.beginPath(); c.moveTo(13, -3); c.lineTo(-2, 0); c.lineTo(13, 3); c.stroke(); // split along the carapace rim
-  c.restore();
+  c.restore(); c.globalAlpha = 1;
 }
 
-// ============================================================ persistence
+// ============================================================ persistence (real-time aware)
 function save() {
   try {
-    const s = spider;
-    localStorage.setItem(SAVE_KEY, JSON.stringify({stage: s.stage, xp: +s.xp.toFixed(2), hunger: +s.hunger.toFixed(3), thirst: +s.thirst.toFixed(3),
-      energy: +s.energy.toFixed(3), bond: +s.bond.toFixed(3), age: Math.round(s.age), exuviae: world.exuviae, brain: Brain.serialize()}));
+    const s = spider, e = world.egg;
+    localStorage.setItem(SAVE_KEY, JSON.stringify({v: 2, savedAt: gameNow(), genome: s.genome, bornAt: s.bornAt, stageStart: s.stageStart, meals: s.meals,
+      egg: e ? {u: e.u, v: e.v, laid: e.laid} : null, stage: s.stage, fresh: +s.fresh.toFixed(3),
+      hunger: +s.hunger.toFixed(3), thirst: +s.thirst.toFixed(3), energy: +s.energy.toFixed(3), bond: +s.bond.toFixed(3),
+      exuviae: world.exuviae, brain: Brain.serialize()}));
   } catch (e) {}
 }
 function load() {
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch (e) {}
+  if (!d) return false;
+  const s = spider, now = gameNow();
   try {
-    const d = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); if (!d) return;
-    const s = spider;
-    s.stage = clamp(d.stage | 0, 0, 3); s.scale = STAGES[s.stage].scale; s.xp = +d.xp || 0;
+    if (d.v !== 2) {   // migrate a v1 save: 4 stages -> 7 instars, no genome yet
+      d.stage = [0, 2, 5, 6][clamp(d.stage | 0, 0, 3)]; d.bornAt = now - (+d.age || 0) * 1000; d.stageStart = now; d.meals = 0;
+      d.genome = makeGenome(); if (d.brain && d.brain.traits) d.genome.traits = Object.assign({}, d.brain.traits);
+    }
+    s.applyGenome(d.genome || makeGenome());
+    s.stage = clamp(d.stage | 0, 0, ADULT); s.bornAt = Math.min(now, +d.bornAt || now); s.stageStart = Math.min(now, +d.stageStart || now); s.meals = d.meals | 0;   // clamp if the device clock went backwards
+    s.refreshLimbs(); s.scale = s.targetScale(); s.fresh = clamp(+d.fresh || 0, 0, 1);
     s.hunger = clamp(+d.hunger || 0.4, 0, 1); s.thirst = clamp(+d.thirst || 0.3, 0, 1); s.energy = clamp(d.energy == null ? 0.9 : +d.energy, 0.2, 1);
-    s.bond = clamp(+d.bond || 0.2, 0, 1); s.age = +d.age || 0;
-    if (Array.isArray(d.exuviae)) world.exuviae = d.exuviae.slice(-8);
+    s.bond = clamp(+d.bond || 0.2, 0, 1);
+    // time passed while the page was closed: needs drift (capped so a long absence is never fatal); growth clock kept running
+    const away = Math.max(0, now - (+d.savedAt || now)) / HOUR;
+    if (away > 0.01) {
+      s.hunger = Math.min(Math.max(s.hunger, 0.85), s.hunger + away * 0.12); s.thirst = Math.min(Math.max(s.thirst, 0.85), s.thirst + away * 0.1);
+      s.energy = Math.min(1, s.energy + away * 0.3); s.bond = clamp(s.bond - away * 0.01, 0, 1); s.fresh = 0;
+    }
+    if (Array.isArray(d.exuviae)) world.exuviae = d.exuviae.filter(e => e && e.legs).map(e => (e.born = e.born || now, e)).slice(-8);
+    if (d.egg) world.egg = {u: d.egg.u, v: d.egg.v, laid: d.egg.laid};
     Brain.restore(d.brain);
-  } catch (e) {}
+  } catch (e) { return false; }
+  return true;
+}
+
+// ============================================================ egg sac
+function layEgg() {
+  const g = makeGenome(); spider.applyGenome(g); Brain.init(); Object.assign(Brain.traits, g.traits);
+  let u = 0.5, v = 0.5;
+  for (let i = 0; i < 40; i++) { const x = arena.x + u * arena.w, y = arena.y + v * arena.h; if (!inObstacle(x, y, 40)) break; u = rnd(0.2, 0.8); v = rnd(0.2, 0.8); }
+  world.egg = {u, v, laid: gameNow()};
+  spider.stage = 0; spider.hunger = 0.35; spider.thirst = 0.2; spider.energy = 1; spider.bond = 0.1;
+  save();
+}
+function eggPos() { return {x: arena.x + world.egg.u * arena.w, y: arena.y + world.egg.v * arena.h}; }
+function hatch() {
+  const p = eggPos(), s = spider, now = gameNow();
+  world.egg = null; s.bornAt = now; s.stageStart = now; s.meals = 0; s.stage = 0; s.refreshLimbs();
+  s.pos.x = p.x; s.pos.y = p.y; s.vel.x = s.vel.y = 0; s.heading = rnd(0, TAU); s.abdW = s.heading; s.scale = s.targetScale() * 0.55; s.fresh = 1;
+  s.updateBody(0.016); s.placeLegs(); s.enter('PATROL'); s.pause = 2;
+  for (let i = 0; i < 9; i++) { const a = rnd(0, TAU), v = rnd(60, 120); world.parts.push({x: p.x, y: p.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: rnd(2.5, 4), t: 'ling', a}); }
+  world.parts.push({x: p.x, y: p.y - 26, vy: -14, life: 3, t: `${s.genome.name} hatched!`, big: true});
+  Snd.stageUp(); save();
+}
+function updateEgg(dt) {
+  const e = world.egg, p = eggPos();
+  if (world.tool === 'pet' && input.down && input.inside && Math.hypot(input.x - p.x, input.y - p.y) < 26) {   // warming the sac speeds incubation
+    e.laid -= dt * 1000; if (Math.random() < dt * 2) world.parts.push({x: p.x + rnd(-8, 8), y: p.y - 20, vy: -20, life: 1.2, t: '♥'});
+  }
+  const left = e.laid + EGG_MS - gameNow();
+  if (left < 15000 && Math.random() < dt * 3) Snd.crackle();
+  if (left <= 0) hatch();
+}
+function drawEgg(c) {
+  const e = world.egg, p = eggPos(), left = e.laid + EGG_MS - gameNow(), t = world.time;
+  const wob = left < 20000 ? Math.sin(t * 22) * 0.09 * (1 - left / 20000) : Math.sin(t * 1.3) * 0.015;
+  c.fillStyle = 'rgba(0,0,0,0.35)'; c.beginPath(); c.ellipse(p.x + 4, p.y + 7, 17, 9, 0, 0, TAU); c.fill();
+  c.save(); c.translate(p.x, p.y); c.rotate(wob);
+  c.fillStyle = '#cfc6b4'; c.beginPath(); c.arc(0, 0, 15, 0, TAU); c.fill();
+  c.fillStyle = 'rgba(120,100,75,0.35)'; c.beginPath();
+  for (let i = 0; i < 14; i++) { const a = hash(i * 3.1) * TAU, r = hash(i * 7.7) * 10; c.moveTo(Math.cos(a) * r + 2.2, Math.sin(a) * r); c.arc(Math.cos(a) * r, Math.sin(a) * r, 2.2, 0, TAU); }
+  c.fill();
+  c.strokeStyle = 'rgba(245,240,230,0.55)'; c.lineWidth = 0.7; c.beginPath();
+  for (let i = 0; i < 16; i++) { const a = hash(i * 1.7) * TAU, r = 6 + hash(i * 5.3) * 9; c.moveTo(Math.cos(a) * r, Math.sin(a) * r); c.quadraticCurveTo(0, 0, Math.cos(a + 2.2) * 14, Math.sin(a + 2.2) * 14); }
+  c.stroke();
+  c.strokeStyle = 'rgba(160,150,130,0.8)'; c.lineWidth = 1; c.beginPath(); c.arc(0, 0, 15, 0, TAU); c.stroke();
+  if (left < 15000) { c.strokeStyle = 'rgba(60,45,30,0.8)'; c.beginPath(); const k = 1 - left / 15000; c.moveTo(-8 * k, -10); c.lineTo(-2, -4); c.lineTo(3 * k, -9); c.lineTo(7 * k, -2); c.stroke(); }
+  c.fillStyle = 'rgba(255,255,255,0.6)'; c.beginPath(); c.arc(-5, -6, 3, 0, TAU); c.fill();
+  c.restore();
+  c.fillStyle = '#9fb3c8'; c.textAlign = 'center'; c.fillText(`${spider.genome.name}'s egg sac · ${fmtDur(left)}`, p.x, p.y + 30); c.textAlign = 'start';
 }
 
 // ============================================================ boot
 let spider = null;
 resize();
 spider = new Spider();
-load();
+if (!load()) layEgg();
 (() => {
   let x = arena.x + arena.w * 0.5, y = arena.y + arena.h * 0.48;
   for (let i = 0; i < 40 && inObstacle(x, y, 40); i++) { x = rnd(arena.x + 60, arena.x + arena.w - 60); y = rnd(arena.y + 60, arena.y + arena.h - 60); }
@@ -1540,7 +1671,7 @@ $('brainb').onclick = toggleBrain;
 function toggleSenses() { world.senses = !world.senses; $('senses').classList.toggle('on', world.senses); }
 function toggleMute() { Snd.init(); Snd.setMuted(!Snd.muted); $('mute').innerHTML = '<kbd>M</kbd>' + (Snd.muted ? 'Muted' : 'Sound on'); $('mute').classList.toggle('on', Snd.muted); }
 $('night').onclick = toggleNight; $('senses').onclick = toggleSenses; $('mute').onclick = toggleMute;
-$('reset').onclick = () => { if (!confirm('Reset ArachniGotchi? This clears her growth, stats and shed exuviae.')) return; try { localStorage.removeItem(SAVE_KEY); } catch (e) {} location.reload(); };
+$('reset').onclick = () => { if (!confirm('Lay a new egg? Your current spider, its memories and shed skins will be gone for good.')) return; try { localStorage.removeItem(SAVE_KEY); } catch (e) {} location.reload(); };
 $('col').onclick = () => { $('hud').classList.toggle('min'); $('col').textContent = $('hud').classList.contains('min') ? '+' : '–'; };
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
@@ -1571,7 +1702,7 @@ cvs.addEventListener('pointerdown', e => {
     if (world.drops.length > 40) world.drops.splice(0, world.drops.length - 40);
     Snd.splash();
   } else if (world.tool === 'observe') {
-    if (Math.hypot(x - spider.pos.x, y - spider.pos.y) < 30 * spider.scale + 12) input.poke = true;
+    if (!world.egg && Math.hypot(x - spider.pos.x, y - spider.pos.y) < 30 * spider.scale + 12) input.poke = true;
   }
 });
 addEventListener('pointerup', () => { input.down = false; input.petting = false; });
@@ -1600,6 +1731,8 @@ function updateWorld(dt) {
   for (let i = world.flies.length - 1; i >= 0; i--) if (world.flies[i].dead) world.flies.splice(i, 1);
   for (let i = world.drops.length - 1; i >= 0; i--) { const d = world.drops[i]; d.life -= dt; if (d.life < 8) d.r *= Math.exp(-dt * 0.25); if (d.life <= 0) world.drops.splice(i, 1); }
   for (let i = world.parts.length - 1; i >= 0; i--) { const p = world.parts[i]; p.life -= dt; p.y += p.vy * dt; p.x += (p.vx || 0) * dt; if (p.life <= 0) world.parts.splice(i, 1); }
+  if (world.egg) updateEgg(dt);
+  for (let i = world.exuviae.length - 1; i >= 0; i--) if (gameNow() - (world.exuviae[i].born || 0) > EXUVIA_MS) world.exuviae.splice(i, 1);
   // memory decay
   const kd = Math.exp(-dt / 120), ky = Math.exp(-dt / 600);
   for (let i = 0; i < GW * GH; i++) { world.danger[i] *= kd; world.yield[i] *= ky; }
@@ -1801,13 +1934,13 @@ function render() {
     c.beginPath(); c.arc(d.x, d.y, d.r, 0, TAU); c.fill(); c.stroke();
     c.fillStyle = 'rgba(240,250,255,0.85)'; c.beginPath(); c.arc(d.x - d.r * 0.35, d.y - d.r * 0.35, Math.max(0.5, d.r * 0.25), 0, TAU); c.fill();
   }
-  if (world.senses) drawSenses(c);
+  if (world.senses && !world.egg) drawSenses(c);
   for (const f of world.flies) if (f.z < 2) f.draw(c);
-  spider.draw(c);
+  if (world.egg) drawEgg(c); else spider.draw(c);
   for (const f of world.flies) if (f.z >= 2) f.draw(c);
   if (world.night) {
     c.fillStyle = 'rgba(4,8,24,0.55)'; c.fillRect(0, 0, W, H);
-    if (!(spider.state === 'SLEEP' && spider.tuck > 0.6)) {
+    if (!world.egg && !(spider.state === 'SLEEP' && spider.tuck > 0.6)) {
       c.fillStyle = 'rgba(160,240,190,0.75)'; c.beginPath();
       const e = spider.eyeW, r = Math.max(0.7, 1.1 * spider.scale);
       for (let i = 0; i < e.length; i += 2) { c.moveTo(e[i] + r, e[i + 1]); c.arc(e[i], e[i + 1], r, 0, TAU); }
@@ -1818,6 +1951,11 @@ function render() {
   c.textAlign = 'center';
   for (const p of world.parts) {
     c.globalAlpha = clamp(p.life, 0, 1);
+    if (p.t === 'ling') {   // scattering siblings
+      c.strokeStyle = '#3a2d22'; c.lineWidth = 0.7; c.beginPath();
+      for (let k = 0; k < 4; k++) { const a = p.a + 0.6 + k * 0.6 + Math.sin(world.time * 30 + k) * 0.2; c.moveTo(p.x, p.y); c.lineTo(p.x + Math.cos(a) * 4, p.y + Math.sin(a) * 4); c.moveTo(p.x, p.y); c.lineTo(p.x - Math.cos(a) * 4, p.y - Math.sin(a) * 4); }
+      c.stroke(); c.fillStyle = '#4a3a2b'; c.beginPath(); c.arc(p.x, p.y, 1.8, 0, TAU); c.fill(); continue;
+    }
     c.fillStyle = p.t === '♥' ? '#d77fb4' : p.big ? '#f0c46a' : '#9fb3c8';
     c.font = p.big ? '12px ui-monospace,Menlo,monospace' : '11px ui-monospace,Menlo,monospace';
     c.fillText(p.t, p.x, p.y);
@@ -1833,19 +1971,33 @@ function render() {
 const hudEls = {};
 ['stage', 'st', 'mind', 'vh', 'bh', 'vt', 'bt', 've', 'be', 'vb', 'bb', 'vx', 'bx', 'age', 'fps'].forEach(id => hudEls[id] = $(id));
 function updateHUD(fps) {
-  const s = spider, pct = v => Math.round(v * 100) + '%';
-  hudEls.stage.textContent = STAGES[s.stage].name;
-  hudEls.st.textContent = s.state + (s.sub ? ' · ' + s.sub : '') + (Brain.episode ? ' · ' + TACTICS[Brain.episode.tactic] : '');
+  const s = spider, pct = v => Math.round(v * 100) + '%', now = gameNow(), G = s.genome;
+  const sym = G.sex === 'male' ? '♂' : '♀';
+  if (world.egg) {
+    const left = world.egg.laid + EGG_MS - now;
+    hudEls.stage.textContent = `${G.name} ${sym} · egg sac`;
+    hudEls.st.textContent = 'EGG · hatching in ' + fmtDur(left);
+    hudEls.vx.textContent = 'incubating'; hudEls.bx.style.width = pct(clamp(1 - left / EGG_MS, 0, 1));
+    hudEls.age.textContent = G.morph + ' morph · not yet hatched';
+  } else {
+    hudEls.stage.textContent = `${G.name} ${sym} · ${STAGES[s.stage].name}`;
+    hudEls.st.textContent = s.state + (s.sub ? ' · ' + s.sub : '') + (Brain.episode ? ' · ' + TACTICS[Brain.episode.tactic] : '');
+    const mi = s.moltInfo(now);
+    if (!mi) { hudEls.vx.textContent = 'mature'; hudEls.bx.style.width = '100%'; }
+    else if (s.state === 'MOLT') { hudEls.vx.textContent = 'molting…'; hudEls.bx.style.width = '100%'; }
+    else {
+      const tf = clamp(mi.hrs / mi.need, 0, 1), mf = clamp(mi.meals / mi.mealsNeed, 0, 1);
+      hudEls.vx.textContent = mi.premolt ? 'premolt · ' + (mi.ready ? 'any moment' : fmtDur(mi.left)) : `meals ${mi.meals}/${mi.mealsNeed} · ${mi.left > 0 ? fmtDur(mi.left) : 'time ✓'}`;
+      hudEls.bx.style.width = pct(Math.min(tf, mf));
+    }
+    hudEls.age.textContent = `age ${fmtDur(now - s.bornAt)} · ${G.morph}` + (s.fresh > 0.05 ? ' · soft' : '');
+  }
   hudEls.mind.textContent = Brain.label();
   hudEls.vh.textContent = pct(1 - s.hunger); hudEls.bh.style.width = pct(1 - s.hunger);
   hudEls.vt.textContent = pct(1 - s.thirst); hudEls.bt.style.width = pct(1 - s.thirst);
   hudEls.ve.textContent = pct(s.energy); hudEls.be.style.width = pct(s.energy);
   hudEls.vb.textContent = pct(s.bond); hudEls.bb.style.width = pct(s.bond);
-  const need = STAGES[s.stage].xp;
-  hudEls.vx.textContent = isFinite(need) ? Math.floor(s.xp) + ' / ' + need : 'mature';
-  hudEls.bx.style.width = isFinite(need) ? pct(clamp(s.xp / need, 0, 1)) : '100%';
-  const a = Math.floor(s.age); hudEls.age.textContent = 'age ' + Math.floor(a / 60) + 'm ' + (a % 60) + 's · exuviae ' + world.exuviae.length;
-  hudEls.fps.textContent = Math.round(fps) + ' fps';
+  hudEls.fps.textContent = Math.round(fps) + ' fps' + (TIMESCALE > 1 ? ' · ×' + TIMESCALE : '');
 }
 
 // ============================================================ main loop
@@ -1854,18 +2006,19 @@ function frame(now) {
   const raw = (now - last) / 1000; last = now;
   const dt = clamp(raw, 1e-4, 1 / 30);
   if (raw > 0) fpsS += (1 / raw - fpsS) * 0.05;
+  clockSkew += raw * 1000 * (TIMESCALE - 1);
   updateWorld(dt);
-  spider.update(dt);
+  if (!world.egg) spider.update(dt);
   render();
   hudT -= raw; if (hudT <= 0) { hudT = 0.2; updateHUD(fpsS); }
   saveT += raw; if (saveT > 5) { saveT = 0; save(); }
-  tipT += raw; if (tipT > 25 && $('tip').style.opacity !== '0') $('tip').style.opacity = '0';
+  tipT += raw; const tip = $('tip'); if (tipT > 25 && tip && tip.style.opacity !== '0') tip.style.opacity = '0';
   requestAnimationFrame(frame);
 }
 addEventListener('resize', resize);
 addEventListener('beforeunload', save);
 document.addEventListener('visibilitychange', () => { last = performance.now(); if (document.hidden) save(); });
-window.__AG = {spider, world, Fly, input, STAGES, Brain};
+window.__AG = {spider, world, Fly, input, STAGES, Brain, hatch, makeGenome, gameNow, skew: ms => { clockSkew += ms; }, ADULT};
 requestAnimationFrame(frame);
 })();
 </script>
