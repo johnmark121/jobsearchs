@@ -626,8 +626,11 @@ function gammaRand(k) {
     if (u < 1 - 0.0331 * x * x * x * x || Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v; }
 }
 const betaRand = (a, b) => { const x = gammaRand(a), y = gammaRand(b); return x / (x + y); };
-const NN_IN = 8, NN_H = 8;
-const NN_LABELS = ['dist', 'speed', 'away', 'cross', 'air', 'aim', 'self', 'crouch'];
+// strike model: 12 inputs -> 16 -> 8 (tanh) -> 1 (sigmoid), trained online with Adam
+const NN_LAYERS = [12, 16, 8, 1], NN_IN = NN_LAYERS[0], NN_DEPTH = NN_LAYERS.length - 1;
+const NN_LABELS = ['dist', 'speed', 'away', 'cross', 'air', 'aim', 'self', 'crouch', 'camo', 'energy', 'soft', 'size'];
+const NN_PAD = [0, 0.8, 0, 0.7];   // neutral values for the 4 newer inputs when upgrading an older 8-input memory
+const layerArrays = () => NN_LAYERS.slice(1).map(n => new Float32Array(n));
 const CTX = ['still', 'walking', 'flying'], TACTICS = ['stalk', 'ambush', 'flank', 'trance'];
 const TRAITS = [['bold', 'shy', 'bold'], ['curious', 'cautious', 'curious'], ['active', 'lazy', 'energetic'], ['affection', 'aloof', 'affectionate']];
 const Brain = {
@@ -635,54 +638,78 @@ const Brain = {
   arms: null, episode: null, lesson: 'no hunts yet',
   // --- 2. personality traits in [0,1]; 0.5 = neutral
   traits: {bold: .5, curious: .5, active: .5, affection: .5}, drift: {bold: 0, curious: 0, active: 0, affection: 0},
-  // --- 3. neural lunge model: 8 -> 8 (tanh) -> 1 (sigmoid), trained online on every lunge outcome
-  W1: null, b1: null, W2: null, b2: 0, buf: [], recent: [], samples: 0, loss: 0,
-  live: {x: new Float32Array(NN_IN), h: new Float32Array(NN_H), p: 0, active: false},
+  // --- 3. neural lunge model (NN_LAYERS), trained online on every lunge outcome + replay, and while dreaming
+  W: null, B: null, mW: null, vW: null, mB: null, vB: null, adamT: 0, buf: [], recent: [], samples: 0, loss: 0, dreams: 0,
+  live: {x: new Float32Array(NN_IN), acts: layerArrays(), p: 0, active: false},
+  initNet() {
+    this.W = []; this.B = []; this.mW = []; this.vW = []; this.mB = []; this.vB = []; this.adamT = 0;
+    for (let l = 0; l < NN_DEPTH; l++) {
+      const nIn = NN_LAYERS[l], nOut = NN_LAYERS[l + 1], sd = 1 / Math.sqrt(nIn);   // Xavier-style init
+      this.W.push(Float32Array.from({length: nIn * nOut}, () => randn() * sd)); this.B.push(new Float32Array(nOut));
+      this.mW.push(new Float32Array(nIn * nOut)); this.vW.push(new Float32Array(nIn * nOut)); this.mB.push(new Float32Array(nOut)); this.vB.push(new Float32Array(nOut));
+    }
+  },
+  resetAdam() { for (let l = 0; l < NN_DEPTH; l++) { this.mW[l].fill(0); this.vW[l].fill(0); this.mB[l].fill(0); this.vB[l].fill(0); } this.adamT = 0; },
+  instinct() {   // innate prior: close, slow, grounded prey is catchable (more so when hidden, rested and hard-skinned)
+    const inst = [];
+    for (let i = 0; i < 96; i++) {
+      const d = rnd(0.2, 1.6), sp = rnd(0, 1.5), air = Math.random() < 0.2 ? rnd(0.5, 1.2) : 0, camo = Math.random() < 0.3 ? rnd(0, 1) : 0, en = rnd(0.2, 1), soft = Math.random() < 0.15 ? rnd(0, 1) : 0;
+      const reach = 0.85 + 0.15 * camo - 0.2 * soft - 0.15 * (1 - en);
+      inst.push({x: [d, sp, rnd(-.5, .5) * sp, rnd(0, 1) * sp, air, rnd(0.6, 1), rnd(0, .5), rnd(0, 1), camo, en, soft, rnd(0.4, 1.1)], y: d < reach && sp < 0.8 && air === 0 ? 1 : 0});
+    }
+    for (let e = 0; e < 900; e++) this.train(inst[e % inst.length].x, inst[e % inst.length].y, 0.01);
+  },
   init() {
     this.arms = [
       [{a: 2, b: 1}, {a: 1, b: 1.5}, {a: 1, b: 1}, {a: 1.2, b: 1}],   // still prey: instinct favours stalking
       [{a: 1, b: 1}, {a: 1, b: 1}, {a: 2, b: 1}, {a: 1, b: 1}],       // walking prey: instinct favours flanking
       [{a: 1, b: 1.5}, {a: 2, b: 1}, {a: 1, b: 1}, {a: 1, b: 1.5}],   // flying prey: instinct favours ambush
     ].map(r => r.map(c => ({a: c.a, b: c.b, n: 0, w: 0})));
-    this.W1 = Array.from({length: NN_H}, () => Float32Array.from({length: NN_IN}, () => randn() * 0.5));
-    this.b1 = new Float32Array(NN_H); this.W2 = Float32Array.from({length: NN_H}, () => randn() * 0.5); this.b2 = 0;
-    // innate instinct: pre-train on a few synthetic "close, slow, grounded prey is catchable" examples
-    const inst = [];
-    for (let i = 0; i < 48; i++) {
-      const d = rnd(0.2, 1.6), sp = rnd(0, 1.5), air = Math.random() < 0.2 ? rnd(0.5, 1.2) : 0;
-      inst.push({x: [d, sp, rnd(-.5, .5) * sp, rnd(0, 1) * sp, air, rnd(0.6, 1), rnd(0, .5), rnd(0, 1)], y: d < 0.85 && sp < 0.8 && air === 0 ? 1 : 0});
-    }
-    for (let e = 0; e < 400; e++) this.sgd(inst[e % inst.length].x, inst[e % inst.length].y, 0.08);
-    this.samples = 0; this.recent = []; this.buf = [];
+    this.arms.forEach(r => r.forEach(c => { c.a0 = c.a; c.b0 = c.b; }));   // instinct priors that old results fade back toward
+    this.initNet(); this.instinct(); this.resetAdam();
+    this.samples = 0; this.recent = []; this.buf = []; this.dreams = 0;
   },
   // ---------- neural net
-  forward(x, h) {
-    h = h || this._h || (this._h = new Float32Array(NN_H)); let z = this.b2;
-    for (let j = 0; j < NN_H; j++) { let a = this.b1[j]; const w = this.W1[j]; for (let i = 0; i < NN_IN; i++) a += w[i] * x[i]; h[j] = Math.tanh(a); z += this.W2[j] * h[j]; }
-    return 1 / (1 + Math.exp(-z));
-  },
-  sgd(x, y, lr) {
-    const h = this._hs || (this._hs = new Float32Array(NN_H)), p = this.forward(x, h), g = p - y;  // dBCE/dz
-    for (let j = 0; j < NN_H; j++) {
-      const gh = g * this.W2[j] * (1 - h[j] * h[j]);
-      this.W2[j] -= lr * (g * h[j] + 1e-4 * this.W2[j]);
-      const w = this.W1[j]; for (let i = 0; i < NN_IN; i++) w[i] -= lr * (gh * x[i] + 1e-4 * w[i]);
-      this.b1[j] -= lr * gh;
+  forward(x, A) {   // A: optional per-layer activation buffers (for display / backprop)
+    A = A || this._A || (this._A = layerArrays());
+    for (let l = 0; l < NN_DEPTH; l++) {
+      const inp = l ? A[l - 1] : x, out = A[l], W = this.W[l], b = this.B[l], nIn = NN_LAYERS[l], last = l === NN_DEPTH - 1;
+      for (let j = 0; j < out.length; j++) { let z = b[j]; const o = j * nIn; for (let i = 0; i < nIn; i++) z += W[o + i] * inp[i]; out[j] = last ? 1 / (1 + Math.exp(-z)) : Math.tanh(z); }
     }
-    this.b2 -= lr * g;
+    return A[NN_DEPTH - 1][0];
+  },
+  train(x, y, lr) {   // one step of backprop with Adam on binary cross-entropy (+ tiny weight decay)
+    const A = this._tA || (this._tA = layerArrays()), D = this._tD || (this._tD = layerArrays()), p = this.forward(x, A);
+    const b1 = 0.9, b2 = 0.999, t = ++this.adamT, lrt = lr * Math.sqrt(1 - Math.pow(b2, t)) / (1 - Math.pow(b1, t));
+    D[NN_DEPTH - 1][0] = p - y;
+    for (let l = NN_DEPTH - 1; l >= 0; l--) {
+      const inp = l ? A[l - 1] : x, nIn = NN_LAYERS[l], W = this.W[l], d = D[l], mW = this.mW[l], vW = this.vW[l];
+      if (l) { const dp = D[l - 1]; for (let i = 0; i < nIn; i++) { let s = 0; for (let j = 0; j < d.length; j++) s += W[j * nIn + i] * d[j]; dp[i] = s * (1 - inp[i] * inp[i]); } }
+      for (let j = 0; j < d.length; j++) {
+        const o = j * nIn;
+        for (let i = 0; i < nIn; i++) { const k = o + i, g = d[j] * inp[i] + 1e-4 * W[k]; mW[k] = b1 * mW[k] + (1 - b1) * g; vW[k] = b2 * vW[k] + (1 - b2) * g * g; W[k] -= lrt * mW[k] / (Math.sqrt(vW[k]) + 1e-8); }
+        const g = d[j]; this.mB[l][j] = b1 * this.mB[l][j] + (1 - b1) * g; this.vB[l][j] = b2 * this.vB[l][j] + (1 - b2) * g * g; this.B[l][j] -= lrt * this.mB[l][j] / (Math.sqrt(this.vB[l][j]) + 1e-8);
+      }
+    }
     return -(y * Math.log(p + 1e-7) + (1 - y) * Math.log(1 - p + 1e-7));
+  },
+  dream() {   // while asleep: quietly rehearse remembered lunges (memory consolidation)
+    if (this.buf.length < 6) return;
+    for (let k = 0; k < 6; k++) { const b = this.buf[Math.random() * this.buf.length | 0]; this.train(b.x, b.y, 0.002); }
+    this.dreams++;
   },
   features(sp, T, out) {
     const hp = sp.headPt(tmpB), dx = T.x - hp.x, dy = T.y - hp.y, d = Math.hypot(dx, dy) || 1, ux = dx / d, uy = dy / d;
     const radial = T.vx * ux + T.vy * uy, cross = Math.abs(-T.vx * uy + T.vy * ux);
     out[0] = clamp(d / sp.lungeR(), 0, 2); out[1] = clamp(T.speed / 100, 0, 2); out[2] = clamp(radial / 100, -2, 2); out[3] = clamp(cross / 100, 0, 2);
     out[4] = clamp(T.z / 30, 0, 1.5); out[5] = Math.cos(angDiff(sp.heading, Math.atan2(dy, dx))); out[6] = clamp(sp.speed / 150, 0, 2); out[7] = sp.crouch;
+    out[8] = sp.camo; out[9] = sp.energy; out[10] = sp.fresh; out[11] = sp.scale;
     return out;
   },
   learnLunge(x, hit, pPred) {
     const y = hit ? 1 : 0; this.buf.push({x: Array.from(x, v => +v.toFixed(3)), y}); if (this.buf.length > 64) this.buf.shift();
-    let L = 0; for (let k = 0; k < 4; k++) L = this.sgd(x, y, 0.06);
-    for (let k = 0; k < 40; k++) { const b = this.buf[Math.random() * this.buf.length | 0]; this.sgd(b.x, b.y, 0.03); }
+    let L = 0; for (let k = 0; k < 3; k++) L = this.train(x, y, 0.01);
+    for (let k = 0; k < 40; k++) { const b = this.buf[Math.random() * this.buf.length | 0]; this.train(b.x, b.y, 0.004); }
     this.loss = L; this.samples++;
     this.recent.push((pPred >= 0.5) === hit ? 1 : 0); if (this.recent.length > 20) this.recent.shift();
   },
@@ -704,6 +731,7 @@ const Brain = {
     const e = this.episode; if (!e) return; this.episode = null;
     if (typeof spider !== 'undefined' && spider) { spider.stats.hunts++; if (success) spider.stats.catches++; }
     const r = success ? 1 - Math.min(0.5, (now - e.t0) / 40) : 0;     // faster catches are worth more
+    for (const c of this.arms[e.ctx]) { c.a = c.a0 + (c.a - c.a0) * 0.97; c.b = c.b0 + (c.b - c.b0) * 0.97; }   // ~30-hunt memory per prey type
     const arm = this.arms[e.ctx][e.tactic]; arm.a += r; arm.b += 1 - r; arm.n++; if (success) arm.w++;
     this.lesson = `${CTX[e.ctx]} prey: ${TACTICS[e.tactic]} ${success ? 'worked' : 'failed' + (why ? ' (' + why + ')' : '')} · ${arm.w}/${arm.n}`;
   },
@@ -716,16 +744,22 @@ const Brain = {
     return parts.length ? parts.join(' · ') : 'balanced';
   },
   serialize() {
-    return {arms: this.arms, traits: this.traits, W1: this.W1.map(r => Array.from(r, v => +v.toFixed(4))), b1: Array.from(this.b1, v => +v.toFixed(4)),
-      W2: Array.from(this.W2, v => +v.toFixed(4)), b2: +this.b2.toFixed(4), buf: this.buf.slice(-48), samples: this.samples, recent: this.recent, lesson: this.lesson};
+    const r4 = a => Array.from(a, v => +v.toFixed(4));
+    return {arms: this.arms, traits: this.traits, nn: {layers: NN_LAYERS, W: this.W.map(r4), B: this.B.map(r4)},
+      buf: this.buf.slice(-64), samples: this.samples, recent: this.recent, lesson: this.lesson, dreams: this.dreams};
   },
   restore(d) {
     if (!d) return;
     try {
-      if (d.arms && d.arms.length === 3) { this.arms = d.arms; this.arms.forEach(r => { while (r.length < TACTICS.length) r.push({a: 1, b: 1, n: 0, w: 0}); }); }
+      if (d.arms && d.arms.length === 3) {
+        const init = this.arms; this.arms = d.arms;
+        this.arms.forEach((r, i) => { while (r.length < TACTICS.length) r.push({a: 1, b: 1, n: 0, w: 0}); r.forEach((c, j) => { if (c.a0 == null) { c.a0 = init[i][j].a0; c.b0 = init[i][j].b0; } }); });
+      }
       if (d.traits) for (const k in this.traits) if (typeof d.traits[k] === 'number') this.traits[k] = clamp(d.traits[k], 0.05, 0.95);
-      if (d.W1 && d.W1.length === NN_H) { this.W1 = d.W1.map(r => Float32Array.from(r)); this.b1 = Float32Array.from(d.b1); this.W2 = Float32Array.from(d.W2); this.b2 = +d.b2 || 0; }
-      if (Array.isArray(d.buf)) this.buf = d.buf; this.samples = d.samples | 0; if (Array.isArray(d.recent)) this.recent = d.recent; if (d.lesson) this.lesson = d.lesson;
+      if (Array.isArray(d.buf)) this.buf = d.buf.filter(b => b && Array.isArray(b.x)).map(b => ({x: b.x.length >= NN_IN ? b.x.slice(0, NN_IN) : b.x.concat(NN_PAD.slice(b.x.length - 8)), y: b.y ? 1 : 0}));
+      if (d.nn && JSON.stringify(d.nn.layers) === JSON.stringify(NN_LAYERS)) { this.W = d.nn.W.map(r => Float32Array.from(r)); this.B = d.nn.B.map(r => Float32Array.from(r)); }
+      else if (this.buf.length) { for (let e = 0; e < 600; e++) { const b = this.buf[Math.random() * this.buf.length | 0]; this.train(b.x, b.y, 0.006); } }   // older 8x8 brain: re-learn its remembered lunges in the bigger network
+      this.resetAdam(); this.dreams = d.dreams | 0; this.samples = d.samples | 0; if (Array.isArray(d.recent)) this.recent = d.recent; if (d.lesson) this.lesson = d.lesson;
     } catch (e) {}
   },
 };
@@ -919,6 +953,7 @@ class Spider {
   // ---------- state machine / utility AI
   enter(st) {
     if (this.state === st) return;
+    if (this.state === 'LUNGE' && st !== 'FEED') this.lungeFeat = null;   // an interrupted lunge (e.g. scared off) teaches nothing
     this.state = st; this.stateT = 0; this.sub = '';
     const P = STATE_PARAMS[st];
     this.maxSpeed = P.v; this.smoothT = P.st; this.headT = P.ht; this.crouchT = P.cr; this.palpMode = P.palp;
@@ -1043,8 +1078,9 @@ class Spider {
       if (!fly && this.tFocus && this.lungeCD <= 0 && d < lr * 1.35) {
         const x = Brain.features(this, T, this.lungeX || (this.lungeX = new Float32Array(NN_IN))), pr = Brain.forward(x);
         const thr = lerp(0.62, 0.32, this.hunger) - (Brain.traits.bold - 0.5) * 0.16;
+        if (!this.inRangeT) this.exploreAt = Math.random() < Math.max(0.06, 0.35 / (1 + Brain.samples / 12)) ? rnd(0.2, 3) : Infinity;   // one exploration roll per approach, rarer with experience
         this.inRangeT = (this.inRangeT || 0) + 0.12;
-        const explore = Math.random() < 0.03, impatient = this.inRangeT > 5;
+        const explore = this.inRangeT >= this.exploreAt, impatient = this.inRangeT > 6;
         if (pr > thr || explore || impatient) {
           this.lungeFeat = Float32Array.from(x); this.lungeP = pr; this.lungeWhy = pr > thr ? 'model' : explore ? 'explore' : 'impatient';
           ep.lunges++; this.inRangeT = 0; this.enter('LUNGE'); return;
@@ -1258,7 +1294,7 @@ class Spider {
         if (!this.cover) this.cover = this.coverPoint({x: arena.x + arena.w / 2, y: arena.y + arena.h / 2}, {x: 0, y: 0}) || {x: this.pos.x, y: this.pos.y};
         const d = Math.hypot(this.cover.x - this.pos.x, this.cover.y - this.pos.y);
         if (d > 8 && this.tuck < 0.2) { setGoal(this.cover.x, this.cover.y); this.sub = 'to den'; }
-        else { this.sub = 'asleep'; if (Math.random() < dt * 0.6) world.parts.push({x: this.pos.x + 6 * s, y: this.pos.y - 18 * s, vy: -12, vx: 8, life: 2, t: 'z'}); }
+        else { this.sub = 'asleep'; this.dreamT = (this.dreamT || 0) - dt; if (this.dreamT <= 0 && this.tuck > 0.5) { this.dreamT = 0.5; Brain.dream(); } if (Math.random() < dt * 0.6) world.parts.push({x: this.pos.x + 6 * s, y: this.pos.y - 18 * s, vy: -12, vx: 8, life: 2, t: 'z'}); }
         break;
       }
       case 'MOLT': {
@@ -1590,7 +1626,7 @@ class Spider {
     this.gait(dt); this.updateBody(dt); this.updatePalps(dt); this.solveIK(dt);
     if (this.prey) { this.headPt(tmpA); this.prey.x = tmpA.x; this.prey.y = tmpA.y; }
     const lv = Brain.live; lv.active = !!(Brain.episode && this.target && this.tVis);
-    if (lv.active) lv.p = Brain.forward(Brain.features(this, this.target, lv.x), lv.h);
+    if (lv.active) lv.p = Brain.forward(Brain.features(this, this.target, lv.x), lv.acts);
   }
 
   makeExuvia() {
@@ -1942,7 +1978,8 @@ function saveData() {
   return {v: 2, savedAt: gameNow(), genome: s.genome, bornAt: s.bornAt, stageStart: s.stageStart, meals: s.meals,
     egg: e ? {u: e.u, v: e.v, laid: e.laid} : null, stage: s.stage, fresh: +s.fresh.toFixed(3),
     hunger: +s.hunger.toFixed(3), thirst: +s.thirst.toFixed(3), energy: +s.energy.toFixed(3), bond: +s.bond.toFixed(3),
-    stats: s.stats, eggInv: world.eggInv, exuviae: world.exuviae, brain: Brain.serialize()};
+    stats: s.stats, eggInv: world.eggInv, exuviae: world.exuviae, brain: Brain.serialize(),
+    places: {danger: Array.from(world.danger, v => +v.toFixed(2)), food: Array.from(world.yield, v => +v.toFixed(2))}};
 }
 function save() {
   if (suppressSave) return;
@@ -1950,8 +1987,9 @@ function save() {
   if (typeof Online !== 'undefined') Online.queue(false);
 }
 function load() {
-  let d = null;
-  try { d = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch (e) {}
+  let d = null, raw = null;
+  try { raw = localStorage.getItem(SAVE_KEY); d = JSON.parse(raw || 'null'); } catch (e) {}
+  try { if (d && d.brain && !d.brain.nn && !localStorage.getItem(SAVE_KEY + '.backup-brain1')) localStorage.setItem(SAVE_KEY + '.backup-brain1', raw); } catch (e) {}   // rollback copy
   if (!d) return false;
   const s = spider, now = gameNow();
   try {
@@ -1975,6 +2013,7 @@ function load() {
     if (d.stats) s.stats = {meals: d.stats.meals | 0, hunts: d.stats.hunts | 0, catches: d.stats.catches | 0};
     if (Array.isArray(d.eggInv)) world.eggInv = d.eggInv.slice(0, 12);
     Brain.restore(d.brain);
+    if (d.places && d.places.danger && d.places.danger.length === GW * GH) { world.danger.set(d.places.danger); world.yield.set(d.places.food); }   // remembered places (they only fade while you watch)
   } catch (e) { return false; }
   return true;
 }
@@ -2263,36 +2302,32 @@ function drawBrain(c) {
   c.fillStyle = 'rgba(3,4,8,0.88)'; c.strokeStyle = '#1e2731'; c.lineWidth = 1; c.beginPath(); c.rect(0.5, 0.5, pw - 1, ph - 1); c.fill(); c.stroke();
   c.font = '10px ui-monospace,Menlo,Consolas,monospace'; c.textAlign = 'start';
   c.fillStyle = '#6b7987'; c.fillText('BRAIN', 10, 16); c.fillStyle = '#d9a441'; c.textAlign = 'right'; c.fillText(Brain.label(), pw - 10, 16); c.textAlign = 'start';
-  // -- neural net 8-8-1
-  const lv = Brain.live, X = lv.x, Hh = lv.h, inX = 62, hX = 132, oX = 196, y0 = 34, dy = 14;
-  const iy = i => y0 + i * dy, hy = j => y0 + j * dy;
-  for (let j = 0; j < NN_H; j++) for (let i = 0; i < NN_IN; i++) {
-    const w = Brain.W1[j][i], a = Math.min(0.75, Math.abs(w) * 0.35);
-    if (a < 0.04) continue;
-    c.strokeStyle = w > 0 ? `rgba(60,90,255,${a.toFixed(3)})` : `rgba(255,120,60,${a.toFixed(3)})`; c.lineWidth = 0.4 + Math.min(1.6, Math.abs(w) * 0.6);
-    c.beginPath(); c.moveTo(inX, iy(i)); c.lineTo(hX, hy(j)); c.stroke();
+  // -- neural net 12-16-8-1
+  const lv = Brain.live, act = lv.active ? 1 : 0.35, colX = [60, 108, 156, 204], y0 = 30, span = 112;
+  const ny = (l, j) => { const n = NN_LAYERS[l]; return n === 1 ? y0 + span / 2 : y0 + j * span / (n - 1); };
+  const val = (l, j) => l ? lv.acts[l - 1][j] : lv.x[j];
+  for (let l = 0; l < NN_DEPTH; l++) {
+    const nIn = NN_LAYERS[l], W = Brain.W[l];
+    for (let j = 0; j < NN_LAYERS[l + 1]; j++) for (let i = 0; i < nIn; i++) {
+      const w = W[j * nIn + i], a = Math.min(0.7, Math.abs(w) * 0.3);
+      if (a < 0.06) continue;
+      c.strokeStyle = w > 0 ? `rgba(60,90,255,${a.toFixed(3)})` : `rgba(255,120,60,${a.toFixed(3)})`; c.lineWidth = 0.3 + Math.min(1.4, Math.abs(w) * 0.5);
+      c.beginPath(); c.moveTo(colX[l], ny(l, i)); c.lineTo(colX[l + 1], ny(l + 1, j)); c.stroke();
+    }
   }
-  const oy = y0 + 3.5 * dy;
-  for (let j = 0; j < NN_H; j++) {
-    const w = Brain.W2[j], a = Math.min(0.85, Math.abs(w) * 0.3);
-    c.strokeStyle = w > 0 ? `rgba(60,90,255,${a.toFixed(3)})` : `rgba(255,120,60,${a.toFixed(3)})`; c.lineWidth = 0.5 + Math.min(2, Math.abs(w) * 0.5);
-    c.beginPath(); c.moveTo(hX, hy(j)); c.lineTo(oX, oy); c.stroke();
+  c.font = '9px ui-monospace,Menlo,Consolas,monospace';
+  for (let l = 0; l < NN_DEPTH; l++) for (let j = 0; j < NN_LAYERS[l]; j++) {
+    const v = clamp(val(l, j), -1, 1) * act, y = ny(l, j);
+    c.fillStyle = l === 0 ? `rgba(255,176,46,${(0.12 + 0.8 * Math.abs(v)).toFixed(3)})` : v >= 0 ? `rgba(90,120,255,${(0.15 + 0.8 * v).toFixed(3)})` : `rgba(255,130,70,${(0.15 - 0.8 * v).toFixed(3)})`;
+    c.beginPath(); c.arc(colX[l], y, l === 1 ? 3 : 3.6, 0, TAU); c.fill(); c.strokeStyle = '#ff3b30'; c.lineWidth = 0.9; c.stroke();
+    if (l === 0) { c.fillStyle = '#6b7987'; c.fillText(NN_LABELS[j], 10, y + 3); }
   }
-  const act = lv.active ? 1 : 0.35;
-  for (let i = 0; i < NN_IN; i++) {
-    const v = clamp(Math.abs(X[i]), 0, 1) * act;
-    c.fillStyle = `rgba(255,176,46,${(0.12 + 0.8 * v).toFixed(3)})`; c.beginPath(); c.arc(inX, iy(i), 4.2, 0, TAU); c.fill();
-    c.strokeStyle = '#ff3b30'; c.lineWidth = 1; c.stroke();
-    c.fillStyle = '#6b7987'; c.fillText(NN_LABELS[i], 10, iy(i) + 3);
-  }
-  for (let j = 0; j < NN_H; j++) {
-    const v = Hh[j] * act; c.fillStyle = v >= 0 ? `rgba(90,120,255,${(0.15 + 0.8 * v).toFixed(3)})` : `rgba(255,130,70,${(0.15 - 0.8 * v).toFixed(3)})`;
-    c.beginPath(); c.arc(hX, hy(j), 4.6, 0, TAU); c.fill(); c.strokeStyle = '#ff3b30'; c.stroke();
-  }
-  c.fillStyle = `rgba(255,176,46,${(0.2 + 0.8 * lv.p * act).toFixed(3)})`; c.beginPath(); c.arc(oX, oy, 9, 0, TAU); c.fill(); c.strokeStyle = '#ff3b30'; c.lineWidth = 1.4; c.stroke();
-  c.fillStyle = '#e6edf3'; c.textAlign = 'center'; c.fillText(lv.active ? Math.round(lv.p * 100) + '%' : '—', oX, oy + 22); c.fillStyle = '#6b7987'; c.fillText('P(catch)', oX, oy - 14); c.textAlign = 'start';
+  c.font = '10px ui-monospace,Menlo,Consolas,monospace';
+  const ox = colX[3], oy = ny(3, 0);
+  c.fillStyle = `rgba(255,176,46,${(0.2 + 0.8 * lv.p * act).toFixed(3)})`; c.beginPath(); c.arc(ox, oy, 9, 0, TAU); c.fill(); c.strokeStyle = '#ff3b30'; c.lineWidth = 1.4; c.stroke();
+  c.fillStyle = '#e6edf3'; c.textAlign = 'center'; c.fillText(lv.active ? Math.round(lv.p * 100) + '%' : '—', ox, oy + 22); c.fillStyle = '#6b7987'; c.fillText('P(catch)', ox, oy - 14); c.textAlign = 'start';
   c.fillStyle = '#8f9cab';
-  c.fillText(`strike model · ${Brain.samples} lunges · acc ${Brain.recent.length ? Math.round(Brain.accuracy() * 100) + '%' : '—'}`, 10, 160);
+  c.fillText(`12·16·8·1 · ${Brain.samples} lunges · acc ${Brain.recent.length ? Math.round(Brain.accuracy() * 100) + '%' : '—'} · ${Brain.dreams} dreams`, 10, 160);
   // -- tactics table
   const tx0 = 64, cw = 45, ty0 = 180;
   c.fillStyle = '#6b7987'; c.fillText('TACTICS', 10, ty0);
