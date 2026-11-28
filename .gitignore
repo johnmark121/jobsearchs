@@ -1,0 +1,14 @@
+# dependencies & build output
+node_modules/
+dist/
+# Firebase local state, debug logs and emulator data
+.firebase/
+*-debug.log
+emulator-data/
+# secrets: never commit these (use GitHub Secrets / Workload Identity Federation instead)
+.env
+.env.*
+*service-account*.json
+*-credentials.json
+.runtimeconfig.json
+firebase/config.json

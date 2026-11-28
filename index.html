@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>ArachniGotchi</title>
+<title>Mystery Egg Critters</title>
 <style>
 :root{--bg:#080a0d;--panel:rgba(12,16,21,.88);--line:#1e2731;--txt:#c7d1db;--dim:#6b7987;--acc:#d9a441;--ok:#73b977;--water:#5aa6d6;--warn:#d9744a;--bond:#c97bb0}
 *{box-sizing:border-box}
@@ -47,9 +47,10 @@ button kbd{color:var(--dim);font:inherit;margin-right:4px}
 <body>
 <canvas id="c"></canvas>
 <div id="hud">
-  <div class="hdr"><b>ARACHNIGOTCHI</b><span id="stage"></span><button id="col" title="Collapse">–</button></div>
+  <div class="hdr"><b>CRITTERGOTCHI</b><span id="stage"></span><button id="col" title="Collapse">–</button></div>
   <div id="hb">
     <div class="row"><span class="k">state</span><span id="st">—</span></div>
+    <div class="row"><span class="k">species</span><span id="spc">—</span></div>
     <div class="row"><span class="k">mind</span><span id="mind">—</span></div>
     <div class="row"><span class="k">satiety</span><span id="vh"></span></div><div class="bar"><i id="bh" style="background:var(--ok)"></i></div>
     <div class="row"><span class="k">hydration</span><span id="vt"></span></div><div class="bar"><i id="bt" style="background:var(--water)"></i></div>
@@ -60,8 +61,8 @@ button kbd{color:var(--dim);font:inherit;margin-right:4px}
   </div>
 </div>
 <div id="tip"><b>Care guide</b><br>
-Your spider hatches from an egg sac (hold <b>Pet</b> on it to warm it) and grows over real days: each molt needs time <i>and</i> meals.<br>
-<b>1 Observe</b> – rest the cursor near your spider to be greeted by its pedipalps; flick it fast and it bolts for cover.<br>
+Every egg is a <b>mystery</b>: it could hatch a wolf spider, a huntsman, an orb weaver, a jumping spider, a black widow, or (rarely) a tarantula or a scorpion. Hold <b>Pet</b> on the egg to warm it. Your critter grows over real days: each molt needs time <i>and</i> meals.<br>
+<b>1 Observe</b> – rest the cursor near your critter and it reaches out to greet you; flick it fast and it bolts for cover.<br>
 <b>2 Prey</b> – click to drop a fly. <b>3 Mist</b> – click to spray water droplets.<br>
 <b>4 Pet</b> – press and hold on its body.<br>
 <b>N</b> night · <b>S</b> senses overlay · <b>O</b> online · <b>V</b> visual style · <b>C</b> CPG network · <b>B</b> brain · <b>M</b> sound. Audio unlocks on first click.</div>
@@ -87,22 +88,102 @@ Your spider hatches from an egg sac (hold <b>Pet</b> on it to warm it) and grows
 // ============================================================ constants
 const TAU = Math.PI * 2, PI = Math.PI;
 const STANCE = 0.62;
-const LEG_NAMES = ['L1','L2','L3','L4','R1','R2','R3','R4'];
-const PHASE0 = {L1:0.00,R1:0.50,L2:0.50,R2:0.00,L3:0.25,R3:0.75,L4:0.75,R4:0.25};
 // Coxa, Trochanter, Femur, Patella, Tibia, Metatarsus, Tarsus
-const LEG_SEG = [5, 4, 26, 9, 22, 20, 10];
-const LEG_Z   = [10, 12, 23, 21, 13, 5, 0];           // dorsal elevation profile of joints 0..6 (joint 7 = claw)
-const LEG_W   = [3.4, 3.0, 3.3, 2.8, 2.4, 1.6, 1.1];  // segment widths
 const LIFT_W  = [0, 0, 0.12, 0.22, 0.38, 0.58, 0.82, 1]; // swing lift distribution per joint
-const LEG_LEN_MUL = [1.16, 1.0, 0.94, 1.1];
-const ATTACH_ANG = [0.50, 1.05, 1.75, 2.40];          // coxa socket angles on the carapace rim
-const REST_ANG   = [0.62, 1.28, 1.95, 2.62];          // resting foot angles
-const REST_REACH = [0.72, 0.70, 0.69, 0.76];
-// Coxa, Trochanter, Femur, Patella, Tibia, Tarsus
-const PALP_SEG = [3, 3, 8, 3.5, 5, 5.5];
-const PALP_Z   = [9, 10, 12, 10, 6, 3];
 const PALP_LIFT = [0, 0.05, 0.2, 0.4, 0.65, 0.85, 1];
-const PALP_W   = [2.0, 1.8, 1.9, 1.7, 1.6, 1.9];
+// ---- SPECIES: the egg is a mystery; one of these hatches, weighted by rarity
+// Every limb is a 7-segment walking leg (joints 0..7) plus a 6-segment front appendage pair
+// (spider pedipalps, insect antennae, mantis raptorial forelegs or scorpion pincers).
+const SPIDER_ATTACH = [0.50, 1.05, 1.75, 2.40].map(a => [1 + Math.cos(a) * 9, Math.sin(a) * 8.5]);
+const SPECIES = {
+  wolf: {name: 'Wolf Spider', latin: 'Araneae · Lycosidae', rarity: 'common', w: 28, kind: 'spider', pairs: 4, young: 'Spiderling',
+    seg: [5, 4, 26, 9, 22, 20, 10], z: [10, 12, 23, 21, 13, 5, 0], wid: [3.4, 3.0, 3.3, 2.8, 2.4, 1.6, 1.1], mul: [1.16, 1.0, 0.94, 1.1],
+    attach: SPIDER_ATTACH, restA: [0.62, 1.28, 1.95, 2.62], reach: [0.72, 0.70, 0.69, 0.76], restC: [2, 2, 2, 2],
+    palp: {seg: [3, 3, 8, 3.5, 5, 5.5], z: [9, 10, 12, 10, 6, 3], wid: [2.0, 1.8, 1.9, 1.7, 1.6, 1.9], base: [13, 3.6], dx: 0, spread: 0},
+    head: 20, abdX: -12.5, flex: 1, speed: 1, lunge: 1, shine: [[12.6, 2.0], [8.7, 3.3]],
+    note: 'Lycosidae (wolf spiders): eight eyes in three rows; the large posterior median pair faces forward.',
+    morphs: [['brown', 55, 28, 0.27, 0.18], ['grey', 20, 210, 0.07, 0.19], ['rust', 15, 14, 0.42, 0.19], ['sand', 10, 36, 0.30, 0.26]]},
+  jumper: {name: 'Jumping Spider', latin: 'Araneae · Salticidae', rarity: 'uncommon', w: 14, kind: 'jumper', pairs: 4, young: 'Spiderling',
+    seg: [5, 4, 26, 9, 22, 20, 10], z: [9, 11, 19, 17, 10, 4, 0], wid: [4.2, 3.8, 4.4, 3.6, 3.0, 2.0, 1.4], mul: [0.84, 0.64, 0.6, 0.7],
+    attach: SPIDER_ATTACH, restA: [0.55, 1.25, 1.95, 2.6], reach: [0.72, 0.72, 0.72, 0.76], restC: [2, 2, 2, 2],
+    palp: {seg: [3, 3, 7, 3, 4.5, 5], z: [9, 10, 11, 9, 6, 3], wid: [2.4, 2.2, 2.4, 2.2, 2.2, 2.6], base: [13, 3.6], dx: -1, spread: 0},
+    head: 19, abdX: -12.5, flex: 1, speed: 0.95, lunge: 1.9, jump: true, pattern: 'spots', fuzz: true,
+    eyes: [[13.2, 2.6, 3.0], [12.3, 6.0, 1.3], [8.0, 5.8, 0.6], [4.0, 6.4, 1.1]], shine: [[13.2, 2.6], [12.3, 6.0]],
+    note: 'Salticidae (jumping spiders): huge forward eyes give sharp vision; they leap onto prey on a safety line.',
+    morphs: [['black', 45, 220, 0.08, 0.09], ['bronze', 30, 30, 0.38, 0.15], ['regal orange', 15, 20, 0.62, 0.22], ['teal', 10, 175, 0.4, 0.14]]},
+  beetle: {name: 'Ground Beetle', latin: 'Coleoptera · Carabidae', rarity: 'common', w: 0, retired: true, kind: 'beetle', pairs: 3, young: 'Larva',
+    seg: [3, 3, 15, 2, 13, 6, 5], z: [6, 8, 15, 14, 7, 3, 0], wid: [2.8, 2.6, 3.4, 2.4, 2.0, 1.4, 1.1], mul: [0.95, 1.0, 1.15],
+    attach: [[9, 4], [1, 5], [-3, 5.5]], restA: [0.7, 1.6, 2.4], reach: [0.72, 0.70, 0.74], restC: [9, 1, -3],
+    palp: {seg: [2, 4, 4, 4, 4, 4], z: [6, 8, 9, 8, 6, 4], wid: [1.1, 0.9, 0.9, 0.9, 0.9, 1.1], base: [19, 2.6], dx: 4, spread: 5, antenna: true},
+    head: 24, abdX: 2, flex: 0.2, speed: 0.9, lunge: 1, shine: [[18, 4.3]],
+    note: 'Carabidae (ground beetles): hardened forewings (elytra) shield the body; they run down prey at night.',
+    morphs: [['jet', 40, 230, 0.10, 0.09], ['emerald', 30, 140, 0.55, 0.17], ['sapphire', 20, 215, 0.55, 0.17], ['copper', 10, 20, 0.55, 0.19]]},
+  ant: {name: 'Bullet Ant', latin: 'Hymenoptera · Paraponeridae', rarity: 'common', w: 0, retired: true, kind: 'ant', pairs: 3, young: 'Larva',
+    seg: [3, 3, 20, 2, 18, 8, 6], z: [7, 9, 18, 16, 9, 3, 0], wid: [2.0, 1.8, 2.2, 1.6, 1.4, 1.1, 0.9], mul: [1.0, 1.05, 1.2],
+    attach: [[10, 2.4], [6, 3], [2, 2.8]], restA: [0.7, 1.55, 2.45], reach: [0.72, 0.70, 0.74], restC: [10, 6, 2],
+    palp: {seg: [2, 10, 3, 3, 3, 3], z: [7, 9, 13, 11, 8, 5], wid: [1.0, 1.0, 0.8, 0.8, 0.7, 0.8], base: [21, 2.4], dx: 4, spread: 4, antenna: true},
+    head: 26, abdX: -4, flex: 0.8, speed: 1.3, lunge: 1, shine: [[17.5, 5]],
+    note: 'Ants: elbowed antennae, a narrow waist (petiole) and a gaster; they taste the world through their antennae.',
+    morphs: [['red', 45, 8, 0.6, 0.2], ['black', 40, 220, 0.08, 0.09], ['amber', 15, 32, 0.6, 0.24]]},
+  mantis: {name: 'Praying Mantis', latin: 'Mantodea · Mantidae', rarity: 'rare', w: 0, retired: true, kind: 'mantis', pairs: 2, young: 'Nymph',
+    seg: [3, 3, 24, 2, 22, 9, 6], z: [8, 10, 22, 20, 10, 3, 0], wid: [2.2, 2.0, 2.2, 1.8, 1.6, 1.2, 1.0], mul: [1.0, 1.25],
+    attach: [[7, 3], [2, 3.4]], restA: [1.15, 2.35], reach: [0.72, 0.78], restC: [7, 2],
+    palp: {seg: [3, 4, 15, 2, 12, 6], z: [8, 10, 16, 14, 9, 4], wid: [2.2, 2.2, 3.2, 1.8, 2.0, 1.3], base: [24, 2.2], dx: -2, spread: -2},
+    head: 36, abdX: 4, flex: 0.6, speed: 0.85, lunge: 1.3, palpTop: true, strikePalps: true, shine: [[28.5, 5.5]],
+    note: 'Mantodea (mantises): spined raptorial forelegs snap shut on prey in a fraction of a second.',
+    morphs: [['green', 60, 95, 0.45, 0.26], ['brown', 30, 32, 0.3, 0.22], ['orchid pink', 10, 330, 0.45, 0.3]]},
+  scorpion: {name: 'Scorpion', latin: 'Scorpiones · Buthidae', rarity: 'legendary', w: 3, kind: 'scorpion', pairs: 4, young: 'Scorpling',
+    seg: [3, 3, 14, 5, 12, 8, 5], z: [7, 9, 17, 16, 9, 3, 0], wid: [2.6, 2.4, 2.8, 2.4, 2.0, 1.4, 1.1], mul: [0.85, 0.9, 0.95, 1.05],
+    attach: [[10, 6], [5, 7.5], [0, 8], [-4, 8]], restA: [0.95, 1.45, 2.0, 2.5], reach: [0.72, 0.72, 0.74, 0.78], restC: [4, 2, 0, -2],
+    palp: {seg: [3, 4, 11, 3, 9, 9], z: [7, 9, 12, 11, 7, 4], wid: [2.4, 2.4, 3.0, 3.0, 3.4, 5.0], base: [13, 4.5], dx: 8, spread: 6},
+    head: 24, abdX: -6, flex: 0.7, speed: 0.85, lunge: 1.1, chela: true, strikePalps: true, shine: [[6, 1.3]],
+    note: 'Scorpiones: pincers (chelae) grab prey; the tail arches overhead to sting. They glow under UV light.',
+    morphs: [['desert yellow', 50, 45, 0.45, 0.25], ['black', 35, 220, 0.08, 0.08], ['emperor blue', 15, 225, 0.25, 0.11]]},
+  // ---- new spiders. Optional look/behaviour keys: size, abdL/abdW (abdomen length/width), pattern
+  // ('chevron' | 'spots' | 'stripes' | 'hourglass' | 'none'), fuzz, legHair, gloss, eyes, nocturnal, shy
+  huntsman: {name: 'Huntsman Spider', latin: 'Araneae · Sparassidae', rarity: 'common', w: 20, kind: 'spider', pairs: 4, young: 'Spiderling',
+    seg: [5, 4, 28, 9, 25, 22, 11], z: [8, 10, 18, 16, 9, 4, 0], wid: [3.2, 2.9, 3.1, 2.6, 2.2, 1.5, 1.0], mul: [1.3, 1.42, 1.32, 1.18],
+    attach: SPIDER_ATTACH, restA: [0.95, 1.38, 1.8, 2.2], reach: [0.74, 0.74, 0.72, 0.72], restC: [2, 2, 2, 2],
+    palp: {seg: [3, 3, 8, 3.5, 5, 5.5], z: [9, 10, 12, 10, 6, 3], wid: [2.0, 1.8, 1.9, 1.7, 1.6, 1.9], base: [13, 3.6], dx: 0, spread: 0}, head: 20, abdX: -12.5, flex: 1, speed: 1.45, lunge: 1.1, abdL: 0.95, abdW: 0.9,
+    eyes: [[12.4, 1.8, 1.2], [12.4, 4.4, 1.0], [9.8, 2.3, 1.0], [9.8, 5.0, 0.95]], shine: [[12.4, 1.8], [9.8, 2.3]],
+    note: 'Sparassidae (huntsman spiders): legs twist sideways so they can sprint and squeeze into cracks; no web, pure speed.',
+    morphs: [['brown', 55, 30, 0.3, 0.2], ['banded grey', 30, 35, 0.12, 0.22], ['green', 15, 95, 0.4, 0.24]]},
+  orb: {name: 'Orb Weaver', latin: 'Araneae · Araneidae', rarity: 'uncommon', w: 16, kind: 'spider', pairs: 4, young: 'Spiderling',
+    seg: [5, 4, 28, 9, 24, 22, 11], z: [10, 12, 24, 22, 13, 5, 0], wid: [3.0, 2.8, 3.0, 2.6, 2.2, 1.5, 1.0], mul: [1.3, 1.15, 0.82, 0.98],
+    attach: SPIDER_ATTACH, restA: [0.55, 1.2, 2.0, 2.65], reach: [0.72, 0.70, 0.68, 0.74], restC: [2, 2, 2, 2],
+    palp: {seg: [3, 3, 8, 3.5, 5, 5.5], z: [9, 10, 12, 10, 6, 3], wid: [2.0, 1.8, 1.9, 1.7, 1.6, 1.9], base: [13, 3.6], dx: 0, spread: 0}, head: 20, abdX: -12.5, flex: 1, speed: 0.8, lunge: 0.9, abdL: 1.0, abdW: 1.45, pattern: 'stripes', shine: [[12.6, 2.0], [8.7, 3.3]],
+    note: 'Araneidae (orb weavers): spin wheel-shaped webs; the big round abdomen holds the silk glands.',
+    morphs: [['yellow garden', 45, 48, 0.65, 0.24], ['marbled orange', 30, 24, 0.6, 0.22], ['grey cross', 25, 30, 0.12, 0.2]]},
+  widow: {name: 'Black Widow', latin: 'Araneae · Theridiidae', rarity: 'rare', w: 9, kind: 'spider', pairs: 4, young: 'Spiderling',
+    seg: [5, 4, 26, 8, 22, 20, 10], z: [9, 11, 22, 20, 12, 5, 0], wid: [2.6, 2.4, 2.6, 2.2, 1.9, 1.3, 0.9], mul: [1.25, 1.0, 0.85, 1.15],
+    attach: SPIDER_ATTACH, restA: [0.6, 1.3, 1.95, 2.6], reach: [0.72, 0.70, 0.69, 0.76], restC: [2, 2, 2, 2],
+    palp: {seg: [3, 3, 8, 3.5, 5, 5.5], z: [9, 10, 12, 10, 6, 3], wid: [2.0, 1.8, 1.9, 1.7, 1.6, 1.9], base: [13, 3.6], dx: 0, spread: 0}, head: 20, abdX: -12.5, flex: 1, speed: 0.85, lunge: 1, abdL: 0.9, abdW: 1.4, pattern: 'hourglass', gloss: true,
+    nocturnal: true, shy: 1.3, shine: [[12.6, 2.0], [8.7, 3.3]],
+    note: 'Theridiidae (widow spiders): glossy black with a red hourglass; shy by day, they hunt at night.',
+    morphs: [['black', 75, 350, 0.1, 0.07], ['brown widow', 25, 30, 0.35, 0.18]]},
+  tarantula: {name: 'Tarantula', latin: 'Araneae · Theraphosidae', rarity: 'legendary', w: 4, kind: 'spider', pairs: 4, young: 'Spiderling',
+    seg: [5, 4, 24, 10, 20, 16, 10], z: [8, 10, 19, 18, 11, 5, 0], wid: [5.2, 4.8, 5.4, 4.6, 4.2, 3.4, 2.8], mul: [1.0, 0.92, 0.9, 1.02],
+    attach: SPIDER_ATTACH, restA: [0.6, 1.3, 1.95, 2.6], reach: [0.72, 0.70, 0.69, 0.76], restC: [2, 2, 2, 2],
+    palp: {seg: [3, 3, 8, 3.5, 5, 6], z: [9, 10, 12, 10, 6, 3], wid: [2.8, 2.6, 2.8, 2.6, 2.6, 3.0], base: [13, 3.6], dx: 0, spread: 0},
+    head: 20, abdX: -12.5, flex: 1, speed: 0.7, lunge: 0.85, size: 1.3, abdL: 1.05, abdW: 1.2, pattern: 'none', fuzz: true, legHair: true,
+    eyes: [[12.4, 1.0, 0.8], [12.0, 2.4, 0.65], [10.9, 1.2, 0.55], [10.7, 2.6, 0.55]], shine: [[12.4, 1.0]],
+    note: 'Theraphosidae (tarantulas): heavy, hairy ambushers; they flick irritating hairs at threats and can live for decades.',
+    morphs: [['chestnut', 40, 22, 0.35, 0.16], ['red-knee', 30, 10, 0.25, 0.1], ['cobalt', 15, 225, 0.45, 0.14], ['pink-toe', 15, 330, 0.15, 0.13]]},
+};
+const RARITY_COL = {common: '#9fb3c8', uncommon: '#73b977', rare: '#5aa6d6', legendary: '#f0c46a'};
+function pickSpecies() { let w = Math.random() * Object.values(SPECIES).reduce((a, s) => a + s.w, 0); for (const k in SPECIES) { if (w < SPECIES[k].w) return k; w -= SPECIES[k].w; } return 'wolf'; }
+const PHASES = {   // gait templates: tetrapod (8 legs), tripod (6), trot (4)
+  4: {L1: 0.00, R1: 0.50, L2: 0.50, R2: 0.00, L3: 0.25, R3: 0.75, L4: 0.75, R4: 0.25},
+  3: {L1: 0.00, R1: 0.50, L2: 0.50, R2: 0.00, L3: 0.00, R3: 0.50},
+  2: {L1: 0.00, R1: 0.50, L2: 0.50, R2: 0.00}};
+let SP = SPECIES.wolf, NP = 4, LEG_NAMES = [], PHASE0 = {}, CPG_LINKS = [];
+function setSpecies(key) {
+  SP = SPECIES[key] || SPECIES.wolf; NP = SP.pairs; PHASE0 = PHASES[NP];
+  LEG_NAMES = []; for (const sd of ['L', 'R']) for (let k = 1; k <= NP; k++) LEG_NAMES.push(sd + k);
+  CPG_LINKS = buildLinks(NP);
+  const R = ['I', 'II', 'III', 'IV', 'V', 'VI'];
+  STAGES.forEach((st, i) => st.name = i === ADULT ? 'Mature Adult' : `Instar ${R[i]} · ${i < 2 ? SP.young : i === 5 ? 'Sub-Adult' : 'Juvenile'}`);
+}
 // Real-time life cycle: each instar needs BOTH real hours and meals before the next molt (~5+ days to adulthood)
 const STAGES = [
   {name: 'Instar I · Spiderling',  scale: 0.40, hours: 10, meals: 3},
@@ -114,6 +195,7 @@ const STAGES = [
   {name: 'Mature Adult',           scale: 1.05, hours: Infinity, meals: Infinity},
 ];
 const ADULT = STAGES.length - 1;
+setSpecies('wolf');
 const HOUR = 3600e3, EGG_MS = 20e3, EXUVIA_MS = 3 * HOUR, PREMOLT = 0.85, MOLT_SHED = 5, MOLT_END = 14;
 // ?timescale=3600 runs the life-cycle clock 3600x faster (for previewing growth)
 const TIMESCALE = Math.max(1, +(new URLSearchParams(location.search).get('timescale')) || 1);
@@ -139,15 +221,15 @@ const STATE_PARAMS = {
 // stance <=> y > 0 (theta in [0, PI)), swing <=> y < 0 (theta in [PI, 2PI)); theta maps piecewise onto gait phase phi
 const phiToTheta = p => p < STANCE ? PI * p / STANCE : PI + PI * (p - STANCE) / (1 - STANCE);
 const thetaToPhi = t => { t = ((t % TAU) + TAU) % TAU; return t < PI ? STANCE * t / PI : STANCE + (1 - STANCE) * (t - PI) / PI; };
-const CPG_LINKS = (() => {
+function buildLinks(P) {
   const l = [], add = (a, b, w, kind) => l.push({a, b, w, kind, err: 0});
-  for (const base of [0, 4]) { for (let k = 0; k < 3; k++) add(base + k, base + k + 1, 1, 'ipsi'); for (let k = 0; k < 2; k++) add(base + k, base + k + 2, 0.35, 'long'); }
-  for (let k = 0; k < 4; k++) add(k, 4 + k, 1, 'contra');
-  for (let k = 0; k < 3; k++) { add(k, 5 + k, 0.45, 'diag'); add(4 + k, k + 1, 0.45, 'diag'); }
+  for (const base of [0, P]) { for (let k = 0; k < P - 1; k++) add(base + k, base + k + 1, 1, 'ipsi'); for (let k = 0; k < P - 2; k++) add(base + k, base + k + 2, 0.35, 'long'); }
+  for (let k = 0; k < P; k++) add(k, P + k, 1, 'contra');
+  for (let k = 0; k < P - 1; k++) { add(k, P + 1 + k, 0.45, 'diag'); add(P + k, k + 1, 0.45, 'diag'); }
   return l;
-})();
+}
 const GW = 16, GH = 10;
-const SAVE_KEY = 'arachnigotchi.v1';
+const SAVE_KEY = 'arachnigotchi.v1';   // keeps existing saves: old spiders load as wolf spiders
 
 // ============================================================ utils
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -575,8 +657,11 @@ function gammaRand(k) {
     if (u < 1 - 0.0331 * x * x * x * x || Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v; }
 }
 const betaRand = (a, b) => { const x = gammaRand(a), y = gammaRand(b); return x / (x + y); };
-const NN_IN = 8, NN_H = 8;
-const NN_LABELS = ['dist', 'speed', 'away', 'cross', 'air', 'aim', 'self', 'crouch'];
+// strike model: 12 inputs -> 16 -> 8 (tanh) -> 1 (sigmoid), trained online with Adam
+const NN_LAYERS = [12, 16, 8, 1], NN_IN = NN_LAYERS[0], NN_DEPTH = NN_LAYERS.length - 1;
+const NN_LABELS = ['dist', 'speed', 'away', 'cross', 'air', 'aim', 'self', 'crouch', 'camo', 'energy', 'soft', 'size'];
+const NN_PAD = [0, 0.8, 0, 0.7];   // neutral values for the 4 newer inputs when upgrading an older 8-input memory
+const layerArrays = () => NN_LAYERS.slice(1).map(n => new Float32Array(n));
 const CTX = ['still', 'walking', 'flying'], TACTICS = ['stalk', 'ambush', 'flank', 'trance'];
 const TRAITS = [['bold', 'shy', 'bold'], ['curious', 'cautious', 'curious'], ['active', 'lazy', 'energetic'], ['affection', 'aloof', 'affectionate']];
 const Brain = {
@@ -584,54 +669,78 @@ const Brain = {
   arms: null, episode: null, lesson: 'no hunts yet',
   // --- 2. personality traits in [0,1]; 0.5 = neutral
   traits: {bold: .5, curious: .5, active: .5, affection: .5}, drift: {bold: 0, curious: 0, active: 0, affection: 0},
-  // --- 3. neural lunge model: 8 -> 8 (tanh) -> 1 (sigmoid), trained online on every lunge outcome
-  W1: null, b1: null, W2: null, b2: 0, buf: [], recent: [], samples: 0, loss: 0,
-  live: {x: new Float32Array(NN_IN), h: new Float32Array(NN_H), p: 0, active: false},
+  // --- 3. neural lunge model (NN_LAYERS), trained online on every lunge outcome + replay, and while dreaming
+  W: null, B: null, mW: null, vW: null, mB: null, vB: null, adamT: 0, buf: [], recent: [], samples: 0, loss: 0, dreams: 0,
+  live: {x: new Float32Array(NN_IN), acts: layerArrays(), p: 0, active: false},
+  initNet() {
+    this.W = []; this.B = []; this.mW = []; this.vW = []; this.mB = []; this.vB = []; this.adamT = 0;
+    for (let l = 0; l < NN_DEPTH; l++) {
+      const nIn = NN_LAYERS[l], nOut = NN_LAYERS[l + 1], sd = 1 / Math.sqrt(nIn);   // Xavier-style init
+      this.W.push(Float32Array.from({length: nIn * nOut}, () => randn() * sd)); this.B.push(new Float32Array(nOut));
+      this.mW.push(new Float32Array(nIn * nOut)); this.vW.push(new Float32Array(nIn * nOut)); this.mB.push(new Float32Array(nOut)); this.vB.push(new Float32Array(nOut));
+    }
+  },
+  resetAdam() { for (let l = 0; l < NN_DEPTH; l++) { this.mW[l].fill(0); this.vW[l].fill(0); this.mB[l].fill(0); this.vB[l].fill(0); } this.adamT = 0; },
+  instinct() {   // innate prior: close, slow, grounded prey is catchable (more so when hidden, rested and hard-skinned)
+    const inst = [];
+    for (let i = 0; i < 96; i++) {
+      const d = rnd(0.2, 1.6), sp = rnd(0, 1.5), air = Math.random() < 0.2 ? rnd(0.5, 1.2) : 0, camo = Math.random() < 0.3 ? rnd(0, 1) : 0, en = rnd(0.2, 1), soft = Math.random() < 0.15 ? rnd(0, 1) : 0;
+      const reach = 0.85 + 0.15 * camo - 0.2 * soft - 0.15 * (1 - en);
+      inst.push({x: [d, sp, rnd(-.5, .5) * sp, rnd(0, 1) * sp, air, rnd(0.6, 1), rnd(0, .5), rnd(0, 1), camo, en, soft, rnd(0.4, 1.1)], y: d < reach && sp < 0.8 && air === 0 ? 1 : 0});
+    }
+    for (let e = 0; e < 900; e++) this.train(inst[e % inst.length].x, inst[e % inst.length].y, 0.01);
+  },
   init() {
     this.arms = [
       [{a: 2, b: 1}, {a: 1, b: 1.5}, {a: 1, b: 1}, {a: 1.2, b: 1}],   // still prey: instinct favours stalking
       [{a: 1, b: 1}, {a: 1, b: 1}, {a: 2, b: 1}, {a: 1, b: 1}],       // walking prey: instinct favours flanking
       [{a: 1, b: 1.5}, {a: 2, b: 1}, {a: 1, b: 1}, {a: 1, b: 1.5}],   // flying prey: instinct favours ambush
     ].map(r => r.map(c => ({a: c.a, b: c.b, n: 0, w: 0})));
-    this.W1 = Array.from({length: NN_H}, () => Float32Array.from({length: NN_IN}, () => randn() * 0.5));
-    this.b1 = new Float32Array(NN_H); this.W2 = Float32Array.from({length: NN_H}, () => randn() * 0.5); this.b2 = 0;
-    // innate instinct: pre-train on a few synthetic "close, slow, grounded prey is catchable" examples
-    const inst = [];
-    for (let i = 0; i < 48; i++) {
-      const d = rnd(0.2, 1.6), sp = rnd(0, 1.5), air = Math.random() < 0.2 ? rnd(0.5, 1.2) : 0;
-      inst.push({x: [d, sp, rnd(-.5, .5) * sp, rnd(0, 1) * sp, air, rnd(0.6, 1), rnd(0, .5), rnd(0, 1)], y: d < 0.85 && sp < 0.8 && air === 0 ? 1 : 0});
-    }
-    for (let e = 0; e < 400; e++) this.sgd(inst[e % inst.length].x, inst[e % inst.length].y, 0.08);
-    this.samples = 0; this.recent = []; this.buf = [];
+    this.arms.forEach(r => r.forEach(c => { c.a0 = c.a; c.b0 = c.b; }));   // instinct priors that old results fade back toward
+    this.initNet(); this.instinct(); this.resetAdam();
+    this.samples = 0; this.recent = []; this.buf = []; this.dreams = 0;
   },
   // ---------- neural net
-  forward(x, h) {
-    h = h || this._h || (this._h = new Float32Array(NN_H)); let z = this.b2;
-    for (let j = 0; j < NN_H; j++) { let a = this.b1[j]; const w = this.W1[j]; for (let i = 0; i < NN_IN; i++) a += w[i] * x[i]; h[j] = Math.tanh(a); z += this.W2[j] * h[j]; }
-    return 1 / (1 + Math.exp(-z));
-  },
-  sgd(x, y, lr) {
-    const h = this._hs || (this._hs = new Float32Array(NN_H)), p = this.forward(x, h), g = p - y;  // dBCE/dz
-    for (let j = 0; j < NN_H; j++) {
-      const gh = g * this.W2[j] * (1 - h[j] * h[j]);
-      this.W2[j] -= lr * (g * h[j] + 1e-4 * this.W2[j]);
-      const w = this.W1[j]; for (let i = 0; i < NN_IN; i++) w[i] -= lr * (gh * x[i] + 1e-4 * w[i]);
-      this.b1[j] -= lr * gh;
+  forward(x, A) {   // A: optional per-layer activation buffers (for display / backprop)
+    A = A || this._A || (this._A = layerArrays());
+    for (let l = 0; l < NN_DEPTH; l++) {
+      const inp = l ? A[l - 1] : x, out = A[l], W = this.W[l], b = this.B[l], nIn = NN_LAYERS[l], last = l === NN_DEPTH - 1;
+      for (let j = 0; j < out.length; j++) { let z = b[j]; const o = j * nIn; for (let i = 0; i < nIn; i++) z += W[o + i] * inp[i]; out[j] = last ? 1 / (1 + Math.exp(-z)) : Math.tanh(z); }
     }
-    this.b2 -= lr * g;
+    return A[NN_DEPTH - 1][0];
+  },
+  train(x, y, lr) {   // one step of backprop with Adam on binary cross-entropy (+ tiny weight decay)
+    const A = this._tA || (this._tA = layerArrays()), D = this._tD || (this._tD = layerArrays()), p = this.forward(x, A);
+    const b1 = 0.9, b2 = 0.999, t = ++this.adamT, lrt = lr * Math.sqrt(1 - Math.pow(b2, t)) / (1 - Math.pow(b1, t));
+    D[NN_DEPTH - 1][0] = p - y;
+    for (let l = NN_DEPTH - 1; l >= 0; l--) {
+      const inp = l ? A[l - 1] : x, nIn = NN_LAYERS[l], W = this.W[l], d = D[l], mW = this.mW[l], vW = this.vW[l];
+      if (l) { const dp = D[l - 1]; for (let i = 0; i < nIn; i++) { let s = 0; for (let j = 0; j < d.length; j++) s += W[j * nIn + i] * d[j]; dp[i] = s * (1 - inp[i] * inp[i]); } }
+      for (let j = 0; j < d.length; j++) {
+        const o = j * nIn;
+        for (let i = 0; i < nIn; i++) { const k = o + i, g = d[j] * inp[i] + 1e-4 * W[k]; mW[k] = b1 * mW[k] + (1 - b1) * g; vW[k] = b2 * vW[k] + (1 - b2) * g * g; W[k] -= lrt * mW[k] / (Math.sqrt(vW[k]) + 1e-8); }
+        const g = d[j]; this.mB[l][j] = b1 * this.mB[l][j] + (1 - b1) * g; this.vB[l][j] = b2 * this.vB[l][j] + (1 - b2) * g * g; this.B[l][j] -= lrt * this.mB[l][j] / (Math.sqrt(this.vB[l][j]) + 1e-8);
+      }
+    }
     return -(y * Math.log(p + 1e-7) + (1 - y) * Math.log(1 - p + 1e-7));
+  },
+  dream() {   // while asleep: quietly rehearse remembered lunges (memory consolidation)
+    if (this.buf.length < 6) return;
+    for (let k = 0; k < 6; k++) { const b = this.buf[Math.random() * this.buf.length | 0]; this.train(b.x, b.y, 0.002); }
+    this.dreams++;
   },
   features(sp, T, out) {
     const hp = sp.headPt(tmpB), dx = T.x - hp.x, dy = T.y - hp.y, d = Math.hypot(dx, dy) || 1, ux = dx / d, uy = dy / d;
     const radial = T.vx * ux + T.vy * uy, cross = Math.abs(-T.vx * uy + T.vy * ux);
     out[0] = clamp(d / sp.lungeR(), 0, 2); out[1] = clamp(T.speed / 100, 0, 2); out[2] = clamp(radial / 100, -2, 2); out[3] = clamp(cross / 100, 0, 2);
     out[4] = clamp(T.z / 30, 0, 1.5); out[5] = Math.cos(angDiff(sp.heading, Math.atan2(dy, dx))); out[6] = clamp(sp.speed / 150, 0, 2); out[7] = sp.crouch;
+    out[8] = sp.camo; out[9] = sp.energy; out[10] = sp.fresh; out[11] = sp.scale;
     return out;
   },
   learnLunge(x, hit, pPred) {
     const y = hit ? 1 : 0; this.buf.push({x: Array.from(x, v => +v.toFixed(3)), y}); if (this.buf.length > 64) this.buf.shift();
-    let L = 0; for (let k = 0; k < 4; k++) L = this.sgd(x, y, 0.06);
-    for (let k = 0; k < 40; k++) { const b = this.buf[Math.random() * this.buf.length | 0]; this.sgd(b.x, b.y, 0.03); }
+    let L = 0; for (let k = 0; k < 3; k++) L = this.train(x, y, 0.01);
+    for (let k = 0; k < 40; k++) { const b = this.buf[Math.random() * this.buf.length | 0]; this.train(b.x, b.y, 0.004); }
     this.loss = L; this.samples++;
     this.recent.push((pPred >= 0.5) === hit ? 1 : 0); if (this.recent.length > 20) this.recent.shift();
   },
@@ -653,6 +762,7 @@ const Brain = {
     const e = this.episode; if (!e) return; this.episode = null;
     if (typeof spider !== 'undefined' && spider) { spider.stats.hunts++; if (success) spider.stats.catches++; }
     const r = success ? 1 - Math.min(0.5, (now - e.t0) / 40) : 0;     // faster catches are worth more
+    for (const c of this.arms[e.ctx]) { c.a = c.a0 + (c.a - c.a0) * 0.97; c.b = c.b0 + (c.b - c.b0) * 0.97; }   // ~30-hunt memory per prey type
     const arm = this.arms[e.ctx][e.tactic]; arm.a += r; arm.b += 1 - r; arm.n++; if (success) arm.w++;
     this.lesson = `${CTX[e.ctx]} prey: ${TACTICS[e.tactic]} ${success ? 'worked' : 'failed' + (why ? ' (' + why + ')' : '')} · ${arm.w}/${arm.n}`;
   },
@@ -665,16 +775,22 @@ const Brain = {
     return parts.length ? parts.join(' · ') : 'balanced';
   },
   serialize() {
-    return {arms: this.arms, traits: this.traits, W1: this.W1.map(r => Array.from(r, v => +v.toFixed(4))), b1: Array.from(this.b1, v => +v.toFixed(4)),
-      W2: Array.from(this.W2, v => +v.toFixed(4)), b2: +this.b2.toFixed(4), buf: this.buf.slice(-48), samples: this.samples, recent: this.recent, lesson: this.lesson};
+    const r4 = a => Array.from(a, v => +v.toFixed(4));
+    return {arms: this.arms, traits: this.traits, nn: {layers: NN_LAYERS, W: this.W.map(r4), B: this.B.map(r4)},
+      buf: this.buf.slice(-64), samples: this.samples, recent: this.recent, lesson: this.lesson, dreams: this.dreams};
   },
   restore(d) {
     if (!d) return;
     try {
-      if (d.arms && d.arms.length === 3) { this.arms = d.arms; this.arms.forEach(r => { while (r.length < TACTICS.length) r.push({a: 1, b: 1, n: 0, w: 0}); }); }
+      if (d.arms && d.arms.length === 3) {
+        const init = this.arms; this.arms = d.arms;
+        this.arms.forEach((r, i) => { while (r.length < TACTICS.length) r.push({a: 1, b: 1, n: 0, w: 0}); r.forEach((c, j) => { if (c.a0 == null) { c.a0 = init[i][j].a0; c.b0 = init[i][j].b0; } }); });
+      }
       if (d.traits) for (const k in this.traits) if (typeof d.traits[k] === 'number') this.traits[k] = clamp(d.traits[k], 0.05, 0.95);
-      if (d.W1 && d.W1.length === NN_H) { this.W1 = d.W1.map(r => Float32Array.from(r)); this.b1 = Float32Array.from(d.b1); this.W2 = Float32Array.from(d.W2); this.b2 = +d.b2 || 0; }
-      if (Array.isArray(d.buf)) this.buf = d.buf; this.samples = d.samples | 0; if (Array.isArray(d.recent)) this.recent = d.recent; if (d.lesson) this.lesson = d.lesson;
+      if (Array.isArray(d.buf)) this.buf = d.buf.filter(b => b && Array.isArray(b.x)).map(b => ({x: b.x.length >= NN_IN ? b.x.slice(0, NN_IN) : b.x.concat(NN_PAD.slice(b.x.length - 8)), y: b.y ? 1 : 0}));
+      if (d.nn && JSON.stringify(d.nn.layers) === JSON.stringify(NN_LAYERS)) { this.W = d.nn.W.map(r => Float32Array.from(r)); this.B = d.nn.B.map(r => Float32Array.from(r)); }
+      else if (this.buf.length) { for (let e = 0; e < 600; e++) { const b = this.buf[Math.random() * this.buf.length | 0]; this.train(b.x, b.y, 0.006); } }   // older 8x8 brain: re-learn its remembered lunges in the bigger network
+      this.resetAdam(); this.dreams = d.dreams | 0; this.samples = d.samples | 0; if (Array.isArray(d.recent)) this.recent = d.recent; if (d.lesson) this.lesson = d.lesson;
     } catch (e) {}
   },
 };
@@ -682,14 +798,13 @@ Brain.init();
 
 // ============================================================ GENOME: every hatchling is different
 const SYL = ['ar', 'ka', 'ne', 'ly', 'so', 'ri', 'ta', 'vo', 'mi', 'ze', 'lu', 'qua', 'pe', 'ro', 'xi', 'da', 'ni', 'sha', 'th', 'or'];
-const MORPHS = [ // name, weight, hue, saturation, lightness
-  ['brown', 55, 28, 0.27, 0.18], ['grey', 20, 210, 0.07, 0.19], ['rust', 15, 14, 0.42, 0.19], ['sand', 10, 36, 0.30, 0.26]];
-function makeGenome() {
+function makeGenome(species) {
+  species = species || pickSpecies(); const MORPHS = SPECIES[species].morphs;   // morph: name, weight, hue, saturation, lightness
   const g = (m, sd, lo, hi) => clamp(m + randn() * sd, lo, hi), pick = a => a[Math.random() * a.length | 0];
   let name = pick(SYL) + pick(SYL) + (Math.random() < 0.5 ? pick(SYL) : ''); name = name[0].toUpperCase() + name.slice(1);
-  let w = Math.random() * 100, m = MORPHS[0]; for (const mm of MORPHS) { if (w < mm[1]) { m = mm; break; } w -= mm[1]; }
-  return {gen: 1, parents: null, name, sex: Math.random() < 0.5 ? 'female' : 'male', morph: m[0],
-    hue: m[2] + g(0, 4, -10, 10), sat: g(m[3], 0.04, 0.03, 0.6), lit: g(m[4], 0.02, 0.12, 0.32), contrast: g(1, 0.15, 0.7, 1.35),
+  let w = Math.random() * MORPHS.reduce((a, mm) => a + mm[1], 0), m = MORPHS[0]; for (const mm of MORPHS) { if (w < mm[1]) { m = mm; break; } w -= mm[1]; }
+  return {species, gen: 1, parents: null, name, sex: Math.random() < 0.5 ? 'female' : 'male', morph: m[0],
+    hue: m[2] + g(0, 4, -10, 10), sat: g(m[3], 0.04, 0.03, 0.7), lit: g(m[4], 0.02, 0.06, 0.34), contrast: g(1, 0.15, 0.7, 1.35),
     size: g(1, 0.06, 0.88, 1.14), leg: g(1, 0.05, 0.9, 1.12), eye: g(1, 0.08, 0.85, 1.2), abd: g(1, 0.07, 0.85, 1.18), speed: g(1, 0.06, 0.88, 1.12),
     chevrons: 3 + (Math.random() * 3 | 0),
     traits: {bold: g(0.5, 0.13, 0.15, 0.85), curious: g(0.5, 0.13, 0.15, 0.85), active: g(0.5, 0.13, 0.15, 0.85), affection: g(0.5, 0.13, 0.15, 0.85)}};
@@ -725,26 +840,34 @@ class Spider {
     this.palpMode = 'rest'; this.tapPh = 0; this.chirpT = 0; this.friend = false;
     this.moltT = 0; this.moltFrom = 0; this.moltDone = false; this.stride = 30; this.gaitF = 0; this.settleCD = 0; this.cpgSync = 1; this.cpgK = 0; this.cpgSwingRate = 2.7;
     this.rayA = new Float32Array(15); this.rayS = new Float32Array(15); this.rayD = new Float32Array(15);
-    this.legs = [];
-    for (const side of [-1, 1]) for (let i = 0; i < 4; i++) {
-      const name = LEG_NAMES[(side < 0 ? 0 : 4) + i];
-      const L = makeLimb(LEG_SEG, LEG_LEN_MUL[i], LEG_Z, [.25, .2, .32, .24, .12, .05]);
+    this.buildLimbs();
+    this.colors = null; this.colorFresh = -1;
+    this.eyeW = [];
+  }
+  buildLimbs() {
+    this.legs = []; this.species = SP;
+    for (const side of [-1, 1]) for (let i = 0; i < NP; i++) {
+      const name = LEG_NAMES[(side < 0 ? 0 : NP) + i];
+      const L = makeLimb(SP.seg, SP.mul[i], SP.z, [.25, .2, .32, .24, .12, .05]);
       Object.assign(L, {name, side, idx: i, phase: PHASE0[name], phase0: PHASE0[name], planted: true,
         foot: {x: 0, y: 0}, sw: {x: 0, y: 0}, tgt: {x: 0, y: 0}, lift: 0, flash: 0, ox: 1, oy: 0, th: 0});
       this.legs.push(L);
     }
-    this.palps = [-1, 1].map(side => Object.assign(makeLimb(PALP_SEG, 1, PALP_Z, [.25, .2, .28, .16, .08]), {side, tl: {x: 24, y: side * 7}, lift: 1, prevU: 0}));
-    this.colors = null; this.colorFresh = -1;
-    this.eyeW = [];
+    this.palps = [-1, 1].map(side => Object.assign(makeLimb(SP.palp.seg, 1, SP.palp.z, [.25, .2, .28, .16, .08]), {side, tl: {x: 24, y: side * 7}, lift: 1, prevU: 0}));
+    this.drawOrder = []; for (let k = NP - 1; k >= 0; k--) this.drawOrder.push(k, NP + k);
   }
   // ---------- genome & growth
-  applyGenome(g) { this.genome = g; this.refreshLimbs(); this.colors = null; }
+  applyGenome(g) {
+    if (!g.species || !SPECIES[g.species]) g.species = 'wolf';
+    setSpecies(g.species); this.genome = g; if (this.species !== SP) this.buildLimbs();
+    this.refreshLimbs(); this.colors = null;
+  }
   isMale() { return this.genome && this.genome.sex === 'male'; }
-  targetScale() { return STAGES[this.stage].scale * (this.genome ? this.genome.size : 1); }
+  targetScale() { return STAGES[this.stage].scale * (this.genome ? this.genome.size : 1) * (SP.size || 1); }
   refreshLimbs() {
     const g = this.genome || {leg: 1};
-    this.legX = g.leg * (this.isMale() && this.stage === ADULT ? 1.08 : 1);   // adult males are leggier
-    for (const L of this.legs) { const mul = LEG_LEN_MUL[L.idx] * this.legX; L.seg = LEG_SEG.map(l => l * mul); L.total = LEG_SEG.reduce((a, b) => a + b, 0) * mul; }
+    this.legX = g.leg * (this.isMale() && this.stage === ADULT && SP.pairs === 4 && SP.kind !== 'scorpion' ? 1.08 : 1);   // adult males are leggier
+    for (const L of this.legs) { const mul = SP.mul[L.idx] * this.legX; L.seg = SP.seg.map(l => l * mul); L.total = SP.seg.reduce((a, b) => a + b, 0) * mul; }
   }
   moltInfo(now) {
     if (this.stage >= ADULT) return null;
@@ -756,15 +879,15 @@ class Spider {
   // ---------- frames
   toWorld(bx, by, out) { out.x = this.cx + bx * this.cs - by * this.sn; out.y = this.cy + bx * this.sn + by * this.cs; return out; }
   toLocal(wx, wy, out) { const dx = wx - this.cx, dy = wy - this.cy; out.x = dx * this.cs + dy * this.sn; out.y = -dx * this.sn + dy * this.cs; return out; }
-  headPt(out) { const k = 20 * this.scale; out.x = this.pos.x + Math.cos(this.heading) * k; out.y = this.pos.y + Math.sin(this.heading) * k; return out; }
+  headPt(out) { const k = SP.head * this.scale; out.x = this.pos.x + Math.cos(this.heading) * k; out.y = this.pos.y + Math.sin(this.heading) * k; return out; }
   bodyR() { return 14 * this.scale; }
-  speedMul() { return (0.5 + 0.5 * this.scale) * (0.6 + 0.4 * this.energy) * (0.85 + 0.3 * Brain.traits.active) * (this.genome ? this.genome.speed : 1) * (1 - 0.35 * this.fresh); }
-  lungeR() { return 70 * this.scale + 26; }
+  speedMul() { return (0.5 + 0.5 * this.scale) * (0.6 + 0.4 * this.energy) * (0.85 + 0.3 * Brain.traits.active) * (this.genome ? this.genome.speed : 1) * SP.speed * (SP.nocturnal && world.night ? 1.15 : 1) * (1 - 0.35 * this.fresh); }
+  lungeR() { return (70 * this.scale + 26) * SP.lunge; }
   envelopR() { return 52 * this.scale + 30; }
   restLocal(leg, out) {
-    const a = REST_ANG[leg.idx], tuckMul = lerp(1, 0.34, this.tuck) * lerp(1, 1.06, this.crouch) * this.splay;
-    const reach = leg.total * this.scale * REST_REACH[leg.idx] * tuckMul;
-    out.x = 2 * this.scale + Math.cos(a) * reach; out.y = leg.side * Math.sin(a) * reach; return out;
+    const a = SP.restA[leg.idx], tuckMul = lerp(1, 0.34, this.tuck) * lerp(1, 1.06, this.crouch) * this.splay;
+    const reach = leg.total * this.scale * SP.reach[leg.idx] * tuckMul;
+    out.x = SP.restC[leg.idx] * this.scale + Math.cos(a) * reach; out.y = leg.side * Math.sin(a) * reach; return out;
   }
   restWorld(leg, out, px, py, h) {
     this.restLocal(leg, out); const c = Math.cos(h), s = Math.sin(h), x = out.x, y = out.y;
@@ -838,7 +961,7 @@ class Spider {
     // threats: fast cursor sweeps or pokes near the spider (felt as air currents / vibration)
     if (input.inside) {
       const d = Math.hypot(input.x - this.pos.x, input.y - this.pos.y);
-      const B = Brain.traits.bold, r = (150 + 90 * s) * (1.3 - 0.6 * B);
+      const B = Brain.traits.bold, r = (150 + 90 * s) * (1.3 - 0.6 * B) * (SP.shy && !world.night ? SP.shy : 1);
       if ((input.speed > 1000 * (0.75 + 0.5 * B) && d < r) || (input.poke && d < 40 * s + 25)) {
         this.threatPoke = !!input.poke;
         this.threat = {x: input.x, y: input.y}; this.threatT = now;
@@ -861,6 +984,7 @@ class Spider {
   // ---------- state machine / utility AI
   enter(st) {
     if (this.state === st) return;
+    if (this.state === 'LUNGE' && st !== 'FEED') this.lungeFeat = null;   // an interrupted lunge (e.g. scared off) teaches nothing
     this.state = st; this.stateT = 0; this.sub = '';
     const P = STATE_PARAMS[st];
     this.maxSpeed = P.v; this.smoothT = P.st; this.headT = P.ht; this.crouchT = P.cr; this.palpMode = P.palp;
@@ -947,7 +1071,7 @@ class Spider {
     if (mi && mi.ready && !this.tVis && st !== 'FEED') { Brain.abandon(); this.enter('MOLT'); return; }
     if (input.petting) { this.enter('GREET'); return; }
     if (st === 'GREET') { this.enter('PATROL'); return; }
-    if (world.night || this.energy < 0.1 || (st === 'SLEEP' && this.sleepLow && this.energy < 0.6)) {
+    if ((world.night && !SP.nocturnal) || this.energy < 0.1 || (st === 'SLEEP' && this.sleepLow && this.energy < 0.6)) {   // nocturnal spiders stay up at night
       if (st !== 'SLEEP') this.sleepLow = !world.night;
       this.enter('SLEEP'); return;
     }
@@ -985,8 +1109,9 @@ class Spider {
       if (!fly && this.tFocus && this.lungeCD <= 0 && d < lr * 1.35) {
         const x = Brain.features(this, T, this.lungeX || (this.lungeX = new Float32Array(NN_IN))), pr = Brain.forward(x);
         const thr = lerp(0.62, 0.32, this.hunger) - (Brain.traits.bold - 0.5) * 0.16;
+        if (!this.inRangeT) this.exploreAt = Math.random() < Math.max(0.06, 0.35 / (1 + Brain.samples / 12)) ? rnd(0.2, 3) : Infinity;   // one exploration roll per approach, rarer with experience
         this.inRangeT = (this.inRangeT || 0) + 0.12;
-        const explore = Math.random() < 0.03, impatient = this.inRangeT > 5;
+        const explore = this.inRangeT >= this.exploreAt, impatient = this.inRangeT > 6;
         if (pr > thr || explore || impatient) {
           this.lungeFeat = Float32Array.from(x); this.lungeP = pr; this.lungeWhy = pr > thr ? 'model' : explore ? 'explore' : 'impatient';
           ep.lunges++; this.inRangeT = 0; this.enter('LUNGE'); return;
@@ -1090,7 +1215,8 @@ class Spider {
           if (d > stop) setGoal(T.x - Math.cos(a) * stop, T.y - Math.sin(a) * stop);
           // run in while still outside the prey's alarm range, then creep the last stretch
           const runK = clamp((d - lr * 1.7) / (lr * 1.5), 0, 1);
-          v = lerp(v * clamp((d - stop) / 40, 0.6, 1), 80, runK);   // steady creep: stays below the prey's startle speed this.crouchT = lerp(STATE_PARAMS.STALK.cr * (1.2 - 0.4 * Brain.traits.bold), 0.15, runK);
+          v = lerp(v * clamp((d - stop) / 40, 0.6, 1), 80, runK);   // steady creep: stays below the prey's startle speed
+          this.crouchT = lerp(STATE_PARAMS.STALK.cr * (1.2 - 0.4 * Brain.traits.bold), 0.15, runK);
           setFace(T.x, T.y); this.faceAlways = true;
         } else if (this.lkp) { const g = this.ghostPos(tmpC); setGoal(g.x, g.y); setFace(g.x, g.y); }
         this.fangT = d < lr * 1.3 ? 0.35 : 0.1;
@@ -1199,7 +1325,7 @@ class Spider {
         if (!this.cover) this.cover = this.coverPoint({x: arena.x + arena.w / 2, y: arena.y + arena.h / 2}, {x: 0, y: 0}) || {x: this.pos.x, y: this.pos.y};
         const d = Math.hypot(this.cover.x - this.pos.x, this.cover.y - this.pos.y);
         if (d > 8 && this.tuck < 0.2) { setGoal(this.cover.x, this.cover.y); this.sub = 'to den'; }
-        else { this.sub = 'asleep'; if (Math.random() < dt * 0.6) world.parts.push({x: this.pos.x + 6 * s, y: this.pos.y - 18 * s, vy: -12, vx: 8, life: 2, t: 'z'}); }
+        else { this.sub = 'asleep'; this.dreamT = (this.dreamT || 0) - dt; if (this.dreamT <= 0 && this.tuck > 0.5) { this.dreamT = 0.5; Brain.dream(); } if (Math.random() < dt * 0.6) world.parts.push({x: this.pos.x + 6 * s, y: this.pos.y - 18 * s, vy: -12, vx: 8, life: 2, t: 'z'}); }
         break;
       }
       case 'MOLT': {
@@ -1208,7 +1334,7 @@ class Spider {
         if (Math.random() < dt * (t < MOLT_SHED ? 14 : 6)) Snd.crackle();
         if (t > MOLT_SHED && !this.moltDone) { this.moltDone = true; this.makeExuvia(); this.fresh = 1; this.softT = 60 + MOLT_END - MOLT_SHED; }
         if (t > MOLT_SHED) {
-          const ns = STAGES[Math.min(ADULT, this.stage + 1)].scale * (this.genome ? this.genome.size : 1);
+          const ns = STAGES[Math.min(ADULT, this.stage + 1)].scale * (this.genome ? this.genome.size : 1) * (SP.size || 1);
           this.scale = lerp(this.moltFrom, ns, smooth01((t - MOLT_SHED) / (MOLT_END - MOLT_SHED)));
           setGoal(this.pos.x + Math.cos(this.heading) * 30, this.pos.y + Math.sin(this.heading) * 30); v = 6;
           this.crouchT = 0.1;
@@ -1230,7 +1356,7 @@ class Spider {
     this.armWave += ((st === 'MESMERIZE' ? 1 : 0) - this.armWave) * Math.min(1, dt * 4);
     const caging = st === 'ENVELOP' || this.cageT > 0, air = st === 'ENVELOP' && this.stateT < 0.3;
     this.splay += ((caging ? (air ? 1.35 : 0.62) : 1) - this.splay) * Math.min(1, dt * (caging ? 20 : 4));
-    this.hopZ = st === 'ENVELOP' && this.stateT < 0.3 ? Math.sin(PI * this.stateT / 0.3) * 16 * s : this.hopZ * Math.exp(-dt * 10);
+    this.hopZ = st === 'ENVELOP' && this.stateT < 0.3 ? Math.sin(PI * this.stateT / 0.3) * 16 * s : SP.jump && st === 'LUNGE' && this.stateT < 0.3 ? Math.sin(PI * this.stateT / 0.3) * 22 * s : this.hopZ * Math.exp(-dt * 10);
     const prevPh = this.cloudPh; this.cloudPh += dt * this.cloudRate * this.display * 1.4;
     if (Math.floor(this.cloudPh) !== Math.floor(prevPh)) Snd.cloud(panOf(this.pos.x));
     if (this.state !== 'MOLT') this.scale += (this.targetScale() - this.scale) * Math.min(1, dt * (this.scale < this.targetScale() * 0.8 ? 0.6 : 2));
@@ -1310,8 +1436,8 @@ class Spider {
 
   // ---------- Kuramoto-coupled tetrapod gait
   neighborsPlanted(i) {
-    const L = this.legs, base = i < 4 ? 0 : 4, idx = i % 4;
-    return (idx === 0 || L[base + idx - 1].planted) && (idx === 3 || L[base + idx + 1].planted) && L[(base + 4) % 8 + idx].planted;
+    const L = this.legs, N = L.length, base = i < NP ? 0 : NP, idx = i % NP;
+    return (idx === 0 || L[base + idx - 1].planted) && (idx === NP - 1 || L[base + idx + 1].planted) && L[(base + NP) % N + idx].planted;
   }
   liftOff(leg) {
     leg.planted = false; if (leg.phase < STANCE) { leg.phase = STANCE; this.setOsc(leg, PI); } leg.sw.x = leg.foot.x; leg.sw.y = leg.foot.y;
@@ -1336,7 +1462,7 @@ class Spider {
     const K = 3.2 * act;
     const dx = this._cdx || (this._cdx = new Float32Array(8)), dy = this._cdy || (this._cdy = new Float32Array(8));
     for (let sub = 0; sub < SUB; sub++) {
-      for (let i = 0; i < 8; i++) { const l = L[i], r2 = l.ox * l.ox + l.oy * l.oy;
+      for (let i = 0; i < L.length; i++) { const l = L[i], r2 = l.ox * l.ox + l.oy * l.oy;
         const w = wSt / (1 + Math.exp(-b * l.oy)) + wSw / (1 + Math.exp(b * l.oy));
         dx[i] = alpha * (1 - r2) * l.ox - w * l.oy; dy[i] = alpha * (1 - r2) * l.oy + w * l.ox; }
       if (K > 0) for (const ln of CPG_LINKS) {
@@ -1347,7 +1473,7 @@ class Spider {
         dx[ln.b] += k * (ax - B.ox); dy[ln.b] += k * (ay - B.oy);
         if (sub === 0) ln.err = Math.hypot(bx - A.ox, by - A.oy);
       }
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < L.length; i++) {
         const l = L[i], old = l.th, nx = l.ox + dx[i] * h, ny = l.oy + dy[i] * h;
         // keep each rhythm moving forward: stance may pause (standing still) but never rewinds; swing always completes
         let d = angDiff(old, Math.atan2(ny, nx)); const swing = ((old % TAU) + TAU) % TAU >= PI;
@@ -1356,10 +1482,10 @@ class Spider {
       }
     }
     let sx = 0, sy = 0; for (const l of L) { const e = l.th - TAU * l.phase0; sx += Math.cos(e); sy += Math.sin(e); }
-    this.cpgSync = Math.hypot(sx, sy) / 8; this.cpgK = K; this.cpgSwingRate = wSw * (1 - STANCE) / PI;
+    this.cpgSync = Math.hypot(sx, sy) / L.length; this.cpgK = K; this.cpgSwingRate = wSw * (1 - STANCE) / PI;
   }
   gait(dt) {
-    const s = this.scale, L = this.legs, N = 8;
+    const s = this.scale, L = this.legs, N = L.length;
     this.stride = 30 * s * (1 + this.speed / 420);
     const reach = 60 * s;
     let f = STANCE * (this.speed + Math.abs(this.angVel) * reach * 0.55) / this.stride;   // descending drive (Hz)
@@ -1471,6 +1597,8 @@ class Spider {
         case 'wave': { const ph = this.tapPh + (side > 0 ? PI * 0.5 : 0); bx = 23 + Math.sin(ph) * 3; by = side * (9 + Math.sin(ph * 1.3) * 4); lift = 12 + Math.sin(ph * 2) * 5; break; }
         case 'feed': bx = 20; by = side * 4; lift = 3 + Math.sin(this.stateT * 9 + side) * 1.5; break;
       }
+      if (SP.strikePalps && (this.state === 'LUNGE' || this.state === 'ENVELOP')) { bx = 38; by = side * 2; lift = 7; }
+      else if (SP.strikePalps && this.state === 'FEED') { bx = 20; by = side * 2; lift = 6; }
       p.tl.x += (bx - p.tl.x) * a; p.tl.y += (by - p.tl.y) * a; p.lift += (lift - p.lift) * a;
     }
   }
@@ -1505,21 +1633,22 @@ class Spider {
   solveIK(dt) {
     const s = this.scale, hMul = (1 - 0.45 * this.crouch) * lerp(1, 0.85, this.tuck), a = 1 - Math.exp(-dt * 30);
     for (const L of this.legs) {
-      const aa = ATTACH_ANG[L.idx];
-      this.toWorld((1 + Math.cos(aa) * 9) * s, L.side * Math.sin(aa) * 8.5 * s, tmpA);
-      const bow = (L.idx < 2 ? 1 : -1) * 3.5 * s;   // front pairs bow forward, rear pairs backward
+      const at = SP.attach[L.idx];
+      this.toWorld(at[0] * s, L.side * at[1] * s, tmpA);
+      const bow = (L.idx < NP / 2 ? 1 : -1) * 3.5 * s;   // front pairs bow forward, rear pairs backward
       let fx = L.foot.x, fy = L.foot.y, lz = L.lift;
       if (L.idx === 0 && this.armWave > 0.01) {   // front legs raised and undulating like cuttlefish arms
         const w = this.armWave, ph = world.time * 4.2 + L.side * 1.3, side = L.side;
         fx += (this.cs * 7 - this.sn * side * 4 * Math.sin(ph)) * s * w; fy += (this.sn * 7 + this.cs * side * 4 * Math.sin(ph)) * s * w;
         lz += (13 + 6 * Math.sin(ph * 1.3)) * s * w;
       }
-      this.solvePlanar(L, tmpA.x, tmpA.y, this.zc, fx, fy, lz, LEG_Z, LIFT_W, lz, bow, hMul, a);
+      this.solvePlanar(L, tmpA.x, tmpA.y, this.zc, fx, fy, lz, SP.z, LIFT_W, lz, bow, hMul, a);
     }
     for (const p of this.palps) {
-      this.toWorld(13 * s, p.side * 3.6 * s, tmpA); const wx = tmpA.x, wy = tmpA.y;
-      this.toWorld(p.tl.x * s, p.tl.y * s, tmpB);
-      this.solvePlanar(p, wx, wy, this.zc - s, tmpB.x, tmpB.y, p.lift, PALP_Z, PALP_LIFT, p.lift, 1.5 * s, hMul, a);
+      const PP = SP.palp, ox = PP.base[0] - 13 + (this.palpMode === 'reach' ? 0 : PP.dx), oy = PP.base[1] - 3.6 + (this.palpMode === 'reach' ? 0 : PP.spread);
+      this.toWorld(PP.base[0] * s, p.side * PP.base[1] * s, tmpA); const wx = tmpA.x, wy = tmpA.y;
+      this.toWorld((p.tl.x + ox) * s, (p.tl.y + p.side * oy) * s, tmpB);
+      this.solvePlanar(p, wx, wy, this.zc - s, tmpB.x, tmpB.y, p.lift + (PP.antenna ? 4 * s : 0), PP.z, PALP_LIFT, p.lift, 1.5 * s, hMul, a);
     }
   }
 
@@ -1528,7 +1657,7 @@ class Spider {
     this.gait(dt); this.updateBody(dt); this.updatePalps(dt); this.solveIK(dt);
     if (this.prey) { this.headPt(tmpA); this.prey.x = tmpA.x; this.prey.y = tmpA.y; }
     const lv = Brain.live; lv.active = !!(Brain.episode && this.target && this.tVis);
-    if (lv.active) lv.p = Brain.forward(Brain.features(this, this.target, lv.x), lv.h);
+    if (lv.active) lv.p = Brain.forward(Brain.features(this, this.target, lv.x), lv.acts);
   }
 
   makeExuvia() {
@@ -1569,73 +1698,32 @@ class Spider {
     }
     c.fill();
   }
-  drawLimb(c, limb, widths, C, s, isLeg) {
-    const R = limb.R, Z = limb.Z, n = limb.n;
-    for (let pass = 0; pass < 2; pass++) {
-      for (let k = 0; k < n - 1; k++) {
-        c.beginPath(); c.moveTo(R[k].x, R[k].y - Z[k]); c.lineTo(R[k + 1].x, R[k + 1].y - Z[k + 1]);
-        if (pass === 0) { c.strokeStyle = C.out; c.lineWidth = widths[k] * s + 1.5; }
-        else { c.strokeStyle = (k === 3 || k === 5) ? C.legB : C.legA; c.lineWidth = widths[k] * s + 0.2; }
-        c.stroke();
-      }
-    }
-    // joint nodes
-    c.fillStyle = C.node; c.beginPath();
-    for (let k = 2; k < n - 2; k++) { const r = widths[k] * s * 0.42 + 0.3; c.moveTo(R[k].x + r, R[k].y - Z[k]); c.arc(R[k].x, R[k].y - Z[k], r, 0, TAU); }
-    c.fill();
-    if (isLeg) {
-      // macrosetae spines on tibia & metatarsus
-      c.strokeStyle = C.out; c.lineWidth = 0.6; c.beginPath();
-      for (const k of [4, 5]) {
-        const ax = R[k].x, ay = R[k].y - Z[k], bx = R[k + 1].x, by = R[k + 1].y - Z[k + 1];
-        const dx = bx - ax, dy = by - ay, l = Math.hypot(dx, dy) || 1, nx = -dy / l, ny = dx / l, w = widths[k] * s;
-        for (const t of [0.35, 0.7]) { const px = ax + dx * t, py = ay + dy * t; c.moveTo(px + nx * w * .4, py + ny * w * .4); c.lineTo(px + nx * w * 1.3 + dx / l * 2 * s, py + ny * w * 1.3 + dy / l * 2 * s); }
+  drawFront(c, C, s) {
+    for (const p of this.palps) this.drawLimb(c, p, SP.palp.wid, C, s, false);
+    if (SP.strikePalps && !SP.chela) {   // mantis: rows of spines on the raptorial femur & tibia
+      c.strokeStyle = C.out; c.lineWidth = 0.7; c.beginPath();
+      for (const p of this.palps) for (const k of [2, 4]) {
+        const ax = p.R[k].x, ay = p.R[k].y - p.Z[k], bx = p.R[k + 1].x, by = p.R[k + 1].y - p.Z[k + 1], dx = bx - ax, dy = by - ay, l = Math.hypot(dx, dy) || 1, nx = -dy / l * p.side, ny = dx / l * p.side;
+        for (let t = 0.2; t < 0.95; t += 0.18) { const x = ax + dx * t, y = ay + dy * t; c.moveTo(x, y); c.lineTo(x - nx * 2.2 * s + dx / l * s, y - ny * 2.2 * s + dy / l * s); }
       }
       c.stroke();
-      // paired bifurcated tarsal claws
-      const t = R[n - 1], u = R[n - 2], tx = t.x, ty = t.y - Z[n - 1];
-      const dx = tx - u.x, dy = ty - (u.y - Z[n - 2]), l = Math.hypot(dx, dy) || 1, ux = dx / l, uy = dy / l, cl = 2.4 * s + 0.6;
-      c.strokeStyle = C.out; c.lineWidth = 0.8; c.beginPath();
-      for (const sg of [-1, 1]) {
-        const ex = tx + (ux * 0.8 - uy * sg * 0.6) * cl, ey = ty + (uy * 0.8 + ux * sg * 0.6) * cl;
-        c.moveTo(tx, ty); c.quadraticCurveTo(tx + ux * cl, ty + uy * cl, ex, ey);
+    }
+    if (SP.chela) for (const p of this.palps) {   // scorpion pincers: a fat hand + fixed and movable fingers
+      const n = p.n, t = p.R[n - 1], u = p.R[n - 2], tx = t.x, ty = t.y - p.Z[n - 1], dx = tx - u.x, dy = ty - (u.y - p.Z[n - 2]);
+      const ang = Math.atan2(dy, dx), hand = 4 * s + 0.6, fl = 6.5 * s + 0.8;
+      c.fillStyle = C.legA; c.strokeStyle = C.out; c.lineWidth = 1;
+      c.beginPath(); c.ellipse(tx - Math.cos(ang) * hand * 0.3, ty - Math.sin(ang) * hand * 0.3, hand, hand * 0.72, ang, 0, TAU); c.fill(); c.stroke();
+      c.strokeStyle = C.legB; c.lineWidth = 1.6 * s + 0.5; c.beginPath();
+      for (const f of [0.12 * p.side, -p.side * (0.18 + 0.6 * this.fang)]) {
+        const a2 = ang + f, bx = tx + Math.cos(ang) * hand * 0.4, by = ty + Math.sin(ang) * hand * 0.4;
+        c.moveTo(bx, by); c.quadraticCurveTo(bx + Math.cos(a2) * fl * 0.6, by + Math.sin(a2) * fl * 0.6, bx + Math.cos(a2 - f * 0.8) * fl, by + Math.sin(a2 - f * 0.8) * fl);
       }
       c.stroke();
     }
   }
-  draw(c) {
-    const s = this.scale, C = this.palette(), X = this.cx, Y = this.cy - this.zc;
-    // ground shadows (cheap, flat alpha)
-    c.fillStyle = 'rgba(0,0,0,0.34)'; c.beginPath();
-    c.ellipse(this.cx + 3 * s + this.zc * 0.25, this.cy + 4 * s + this.zc * 0.3, 15 * s, 11 * s, this.heading, 0, TAU); c.fill();
-    const ax = this.cx + Math.cos(this.abdW) * -26 * s, ay = this.cy + Math.sin(this.abdW) * -26 * s;
-    c.beginPath(); c.ellipse(ax + 3 * s + this.zc * .25, ay + 4 * s + this.zc * .3, 15 * s, 10 * s, this.abdW, 0, TAU); c.fill();
-    c.strokeStyle = 'rgba(0,0,0,0.26)'; c.lineWidth = 1.6 * s + 0.4; c.beginPath();
-    for (const L of this.legs) for (let k = 0; k < 8; k++) { const x = L.R[k].x + L.Z[k] * 0.25, y = L.R[k].y + L.Z[k] * 0.3; k ? c.lineTo(x, y) : c.moveTo(x, y); }
-    c.stroke();
-    // stance contact rings
-    c.lineWidth = 0.8;
-    for (const L of this.legs) {
-      if (!L.planted) continue;
-      const r = (2.2 + (1 - L.flash) * 4) * s + 1;
-      c.strokeStyle = L.flash > 0 ? `rgba(217,164,65,${(0.12 + L.flash * 0.45).toFixed(3)})` : 'rgba(217,164,65,0.12)';
-      c.beginPath(); c.ellipse(L.foot.x, L.foot.y, r, r * 0.6, 0, 0, TAU); c.stroke();
-    }
-    c.lineCap = 'round'; c.lineJoin = 'round';
-    // legs: rear pairs first
-    for (const i of [3, 7, 2, 6, 1, 5, 0, 4]) this.drawLimb(c, this.legs[i], LEG_W, C, s, true);
-    for (const p of this.palps) this.drawLimb(c, p, PALP_W, C, s, false);
-    if (this.isMale() && this.stage >= ADULT - 1) {   // male palpal bulbs: swelling at sub-adult, full at maturity
-      const br = (this.stage === ADULT ? 2.7 : 1.6) * s + 0.4; c.fillStyle = C.rim; c.strokeStyle = C.node; c.lineWidth = 0.7;
-      for (const p of this.palps) { const t = p.R[p.n - 1], z = p.Z[p.n - 1]; c.beginPath(); c.ellipse(t.x, t.y - z, br, br * 0.8, this.heading, 0, TAU); c.fill(); c.stroke(); }
-    }
-    // body in local frame
-    c.save(); c.translate(X, Y); c.rotate(this.heading); c.scale(s, s);
+  drawSpiderBody(c, C, s, G, rel, bw) {
     // abdomen (opisthosoma) on angular spring
-    c.save(); c.translate(-12.5, 0); c.rotate(angDiff(this.heading, this.abdW) + Math.sin(this.bob * 3.1) * 0.015);
-    const G = this.genome || {abd: 1, chevrons: 4, eye: 1};
-    const sexAbd = this.stage === ADULT ? (this.isMale() ? 0.82 : 1.15) : 1;
-    const bw = (1 + 0.03 * Math.sin(this.bob)) * (0.9 + 0.2 * (1 - this.hunger)) * G.abd * sexAbd;
+    c.save(); c.translate(-12.5, 0); c.rotate(rel); c.scale(SP.abdL || 1, SP.abdW || 1);   // per-species abdomen shape
     c.fillStyle = C.abd; c.strokeStyle = C.rim; c.lineWidth = 1.1;
     c.beginPath(); c.moveTo(-1, 0);
     c.bezierCurveTo(-2, -8 * bw, -13, -11 * bw, -21, -9.5 * bw);
@@ -1645,10 +1733,24 @@ class Spider {
     c.fill(); c.stroke();
     if (this.display > 0.02) { c.save(); c.clip(); this.cloudBands(c, 12.5, bw); c.restore(); }
     c.strokeStyle = C.chev; c.lineWidth = 1.2; c.beginPath();
-    c.moveTo(-4, 0); c.lineTo(-12, 0);
-    for (let k = 0; k < G.chevrons; k++) { const x = -15 - k * (17 / G.chevrons), w = (4.8 - k * (3.2 / G.chevrons)) * bw; c.moveTo(x + 2.6, -w); c.lineTo(x, 0); c.lineTo(x + 2.6, w); }
+    const pat = SP.pattern || 'chevron';
+    if (pat === 'chevron') { c.moveTo(-4, 0); c.lineTo(-12, 0); }
+    for (let k = 0; k < (pat === 'chevron' ? G.chevrons : 0); k++) { const x = -15 - k * (17 / G.chevrons), w = (4.8 - k * (3.2 / G.chevrons)) * bw; c.moveTo(x + 2.6, -w); c.lineTo(x, 0); c.lineTo(x + 2.6, w); }
     c.stroke();
     c.fillStyle = C.chev; c.globalAlpha = 0.35; c.beginPath(); c.ellipse(-8, 0, 4.5, 1.8, 0, 0, TAU); c.fill(); c.globalAlpha = 1;
+    if (pat === 'spots') {   // salticid spots
+      c.fillStyle = C.chev; c.beginPath(); for (const [x, y, r] of [[-9, 4.2, 1.8], [-9, -4.2, 1.8], [-18, 5, 1.6], [-18, -5, 1.6], [-26, 0, 2]]) { c.moveTo(x + r, y * bw); c.arc(x, y * bw, r, 0, TAU); } c.fill();
+    } else if (pat === 'stripes') {   // orb weaver: bold cross-bands
+      c.strokeStyle = C.chev; c.lineWidth = 1.9; c.beginPath();
+      for (let k = 0; k < 4; k++) { const x = -8 - k * 6.2, w = 9.6 * bw * Math.sqrt(Math.max(0, 1 - ((x + 17.5) / 17.5) ** 2)); c.moveTo(x + 1.6, -w); c.quadraticCurveTo(x - 1.6, 0, x + 1.6, w); }
+      c.stroke();
+    } else if (pat === 'hourglass') {   // widow: red hourglass
+      c.fillStyle = '#c8202a'; c.beginPath(); c.moveTo(-12.5, -2.8); c.lineTo(-17.6, 0); c.lineTo(-12.5, 2.8); c.closePath(); c.moveTo(-23.5, -2.8); c.lineTo(-18.4, 0); c.lineTo(-23.5, 2.8); c.closePath(); c.fill();
+    }
+    if (SP.gloss) { c.fillStyle = 'rgba(255,255,255,0.22)'; c.beginPath(); c.ellipse(-15, -4.6 * bw, 7, 1.8, -0.15, 0, TAU); c.fill(); }
+    if (SP.fuzz) {   // hairy rim
+      c.strokeStyle = C.out; c.lineWidth = 0.5; c.beginPath(); for (let k = 0; k < 26; k++) { const a = k / 26 * TAU, x = -17 + Math.cos(a) * 16.5, y = Math.sin(a) * 9.5 * bw; c.moveTo(x, y); c.lineTo(x + Math.cos(a) * 1.8, y + Math.sin(a) * 1.8); } c.stroke();
+    }
     c.fillStyle = C.rim; c.beginPath(); c.ellipse(-34.5, -1.3, 1.6, 1, 0.3, 0, TAU); c.ellipse(-34.5, 1.3, 1.6, 1, -0.3, 0, TAU); c.ellipse(-35.3, 0, 1.2, .7, 0, 0, TAU); c.fill();
     c.restore();
     // pedicel
@@ -1685,7 +1787,7 @@ class Spider {
     c.fillStyle = C.rim; c.globalAlpha = 0.6; c.beginPath(); c.ellipse(10.2, 0, 4.4, 6.6, 0, 0, TAU); c.fill(); c.globalAlpha = 1;
     // 8 eyes: AME (large), ALE, PME, PLE
     const ek = Math.pow(s, -0.35) * G.eye;
-    const EYES = [[12.6, 2.0, 2.0], [12.1, 4.4, 1.0], [8.7, 3.3, 1.65], [6.2, 5.6, 1.3]];
+    const EYES = SP.eyes || [[12.6, 2.0, 2.0], [12.1, 4.4, 1.0], [8.7, 3.3, 1.65], [6.2, 5.6, 1.3]];
     const hx = Math.cos(-this.heading) * -0.32 - Math.sin(-this.heading) * -0.36, hy = Math.sin(-this.heading) * -0.32 + Math.cos(-this.heading) * -0.36;
     c.fillStyle = '#05070a'; c.beginPath();
     for (const e of EYES) for (const sd of [-1, 1]) { const r = e[2] * ek; c.moveTo(e[0] + r, e[1] * sd); c.arc(e[0], e[1] * sd, r, 0, TAU); }
@@ -1696,15 +1798,203 @@ class Spider {
     c.fillStyle = 'rgba(235,245,250,0.9)'; c.beginPath();
     for (const e of EYES) for (const sd of [-1, 1]) { const r = e[2] * ek; const x = e[0] + hx * r, y = e[1] * sd + hy * r, rr = Math.max(0.3, r * 0.3); c.moveTo(x + rr, y); c.arc(x, y, rr, 0, TAU); }
     c.fill();
+  }
+  mandibles(c, C, x, y0, len) {   // insect jaws, opened by the same "fang" drive the spiders use
+    const fo = this.fang; c.strokeStyle = C.fang; c.lineWidth = 1.5; c.beginPath();
+    for (const sd of [-1, 1]) { const by = sd * y0; c.moveTo(x, by); c.quadraticCurveTo(x + len * 0.7, sd * (y0 + 1.5 + fo * 2.5), x + len, sd * (0.4 + fo * 3)); }
+    c.stroke();
+  }
+  compoundEyes(c, x, y, rx, ry) {
+    c.fillStyle = '#07090b'; c.beginPath(); c.ellipse(x, y, rx, ry, 0, 0, TAU); c.ellipse(x, -y, rx, ry, 0, 0, TAU); c.fill();
+    c.fillStyle = 'rgba(235,245,250,0.55)'; c.beginPath(); c.arc(x + rx * 0.3, y - ry * 0.3, Math.max(0.3, rx * 0.3), 0, TAU); c.arc(x + rx * 0.3, -y - ry * 0.3, Math.max(0.3, rx * 0.3), 0, TAU); c.fill();
+  }
+  clipCloud(c, xOff, bw) { if (this.display > 0.02) { c.save(); c.clip(); this.cloudBands(c, xOff, bw); c.restore(); } }
+  drawBeetleBody(c, C, s, G, rel, bw) {
+    c.save(); c.translate(2, 0); c.rotate(rel);   // elytra (hardened wing cases)
+    c.fillStyle = C.abd; c.strokeStyle = C.rim; c.lineWidth = 1.1;
+    c.beginPath(); c.moveTo(0, -9.5 * bw); c.bezierCurveTo(-10, -11.5 * bw, -26, -10 * bw, -30, 0); c.bezierCurveTo(-26, 10 * bw, -10, 11.5 * bw, 0, 9.5 * bw); c.closePath(); c.fill(); c.stroke();
+    this.clipCloud(c, -2, bw);
+    c.strokeStyle = C.chev; c.globalAlpha = 0.35; c.lineWidth = 0.7; c.beginPath();
+    for (let k = 1; k <= 3; k++) for (const sd of [-1, 1]) { c.moveTo(-1.5, sd * k * 2.5 * bw); c.quadraticCurveTo(-16, sd * k * 2.9 * bw, -26 + k * 2.2, sd * k * 1.1 * bw); }
+    c.stroke(); c.globalAlpha = 1;
+    c.fillStyle = 'rgba(255,255,255,0.13)'; c.beginPath(); c.ellipse(-11, -4.6 * bw, 8, 1.8, -0.08, 0, TAU); c.ellipse(-11, 4.6 * bw, 8, 1.8, 0.08, 0, TAU); c.fill();
+    c.strokeStyle = C.out; c.lineWidth = 1; c.beginPath(); c.moveTo(0, 0); c.lineTo(-29.6, 0); c.stroke();
     c.restore();
+    c.fillStyle = C.cara; c.strokeStyle = C.rim; c.lineWidth = 1.1;   // pronotum
+    c.beginPath(); c.moveTo(13, -5.5); c.bezierCurveTo(13, -9, 9, -10, 3, -9.5); c.lineTo(1, -8.5); c.lineTo(1, 8.5); c.lineTo(3, 9.5); c.bezierCurveTo(9, 10, 13, 9, 13, 5.5); c.closePath(); c.fill(); c.stroke();
+    this.clipCloud(c, 0, 1);
+    c.strokeStyle = C.groove; c.lineWidth = 0.7; c.beginPath(); c.moveTo(2.5, 0); c.lineTo(12, 0); c.stroke();
+    this.mandibles(c, C, 20.5, 2.6, 6);
+    c.fillStyle = C.cara; c.strokeStyle = C.rim; c.beginPath(); c.ellipse(17, 0, 5, 5.2, 0, 0, TAU); c.fill(); c.stroke();
+    this.compoundEyes(c, 18, 4.3, 1.7 * G.eye, 1.3 * G.eye);
+  }
+  drawAntBody(c, C, s, G, rel, bw) {
+    c.save(); c.translate(-4, 0); c.rotate(rel);   // gaster
+    c.fillStyle = C.abd; c.strokeStyle = C.rim; c.lineWidth = 1.1;
+    c.beginPath(); c.ellipse(-12, 0, 11, 7.6 * bw, 0, 0, TAU); c.fill(); c.stroke();
+    this.clipCloud(c, 4, bw);
+    c.strokeStyle = C.chev; c.globalAlpha = 0.45; c.lineWidth = 0.9; c.beginPath();
+    for (const x of [-7, -12, -17]) { const w = Math.sqrt(Math.max(0, 1 - ((x + 12) / 11) ** 2)) * 7.6 * bw; c.moveTo(x, -w); c.quadraticCurveTo(x - 1.5, 0, x, w); }
+    c.stroke(); c.globalAlpha = 1;
+    c.fillStyle = 'rgba(255,255,255,0.12)'; c.beginPath(); c.ellipse(-10, -3.5 * bw, 5, 1.6, 0, 0, TAU); c.fill();
+    c.restore();
+    c.fillStyle = C.rim; c.beginPath(); c.ellipse(-2.5, 0, 2.2, 2.5, 0, 0, TAU); c.fill();   // petiole node
+    c.fillStyle = C.cara; c.strokeStyle = C.rim; c.lineWidth = 1;   // mesosoma
+    c.beginPath(); c.ellipse(5.5, 0, 7.5, 3.4, 0, 0, TAU); c.fill(); c.stroke();
+    c.beginPath(); c.ellipse(10, 0, 3, 3.9, 0, 0, TAU); c.fill(); c.stroke();
+    this.mandibles(c, C, 22, 2.6, 6.5);
+    c.fillStyle = C.cara; c.strokeStyle = C.rim; c.lineWidth = 1.1;   // head
+    c.beginPath(); c.ellipse(17, 0, 6.2, 6, 0, 0, TAU); c.fill(); c.stroke();
+    this.clipCloud(c, 0, 1);
+    c.strokeStyle = C.groove; c.lineWidth = 0.6; c.beginPath(); c.moveTo(12, 0); c.lineTo(20, 0); c.stroke();
+    this.compoundEyes(c, 17.5, 4.9, 1.6 * G.eye, 1.1 * G.eye);
+  }
+  drawMantisBody(c, C, s, G, rel, bw) {
+    c.save(); c.translate(4, 0); c.rotate(rel);   // folded wings over the long abdomen
+    c.fillStyle = C.abd; c.strokeStyle = C.rim; c.lineWidth = 1.1;
+    c.beginPath(); c.moveTo(0, -4.5 * bw); c.bezierCurveTo(-12, -7.5 * bw, -30, -6 * bw, -38, 0); c.bezierCurveTo(-30, 6 * bw, -12, 7.5 * bw, 0, 4.5 * bw); c.closePath(); c.fill(); c.stroke();
+    this.clipCloud(c, -4, bw);
+    c.strokeStyle = C.chev; c.globalAlpha = 0.45; c.lineWidth = 0.7; c.beginPath();
+    c.moveTo(-1, 0); c.lineTo(-37, 0);
+    for (const sd of [-1, 1]) { c.moveTo(-2, sd * 2.5 * bw); c.quadraticCurveTo(-18, sd * 5 * bw, -32, sd * 1.5 * bw); for (let x = -6; x > -32; x -= 5) { c.moveTo(x, 0); c.lineTo(x - 2.5, sd * 4.2 * bw * (1 - (x + 6) / -40)); } }
+    c.stroke(); c.globalAlpha = 1;
+    c.restore();
+    c.fillStyle = C.cara; c.strokeStyle = C.rim; c.lineWidth = 1;
+    c.beginPath(); c.ellipse(5, 0, 4.2, 3.6, 0, 0, TAU); c.fill(); c.stroke();   // mesothorax
+    c.beginPath(); c.moveTo(8, -2); c.lineTo(22, -1.6); c.quadraticCurveTo(27, -3.2, 28, 0); c.quadraticCurveTo(27, 3.2, 22, 1.6); c.lineTo(8, 2); c.closePath(); c.fill(); c.stroke();   // prothorax
+    this.clipCloud(c, 0, 0.4);
+    c.strokeStyle = C.legA; c.lineWidth = 0.6; c.beginPath();   // antennae
+    for (const sd of [-1, 1]) { c.moveTo(32, sd * 1.4); c.quadraticCurveTo(38, sd * 3, 45 + Math.sin(this.bob * 2 + sd) * 1.5, sd * 9); }
+    c.stroke();
+    this.mandibles(c, C, 33.5, 1.2, 2.5);
+    c.fillStyle = C.cara; c.strokeStyle = C.rim; c.lineWidth = 1.1;   // triangular head
+    c.beginPath(); c.moveTo(35, 0); c.quadraticCurveTo(32, -5, 28, -6.5); c.quadraticCurveTo(25.5, 0, 28, 6.5); c.quadraticCurveTo(32, 5, 35, 0); c.fill(); c.stroke();
+    this.compoundEyes(c, 28.5, 5.3, 2.2 * G.eye, 1.7 * G.eye);
+  }
+  drawScorpionBody(c, C, s, G, rel, bw) {
+    const fo = this.fang;
+    c.save(); c.translate(-6, 0); c.rotate(rel);
+    c.fillStyle = C.abd; c.strokeStyle = C.rim; c.lineWidth = 1.1;   // mesosoma
+    c.beginPath(); c.moveTo(0, -8 * bw); c.bezierCurveTo(-10, -10 * bw, -22, -9 * bw, -27, -3.5); c.lineTo(-27, 3.5); c.bezierCurveTo(-22, 9 * bw, -10, 10 * bw, 0, 8 * bw); c.closePath(); c.fill(); c.stroke();
+    this.clipCloud(c, 6, bw);
+    c.strokeStyle = C.out; c.lineWidth = 0.8; c.beginPath();
+    for (let k = 1; k < 7; k++) { const x = -k * 3.8, w = (8.6 - k * 0.7) * bw; c.moveTo(x, -w); c.quadraticCurveTo(x - 1.2, 0, x, w); }
+    c.stroke();
+    c.strokeStyle = C.chev; c.globalAlpha = 0.4; c.beginPath(); c.moveTo(-1, 0); c.lineTo(-26, 0); c.stroke(); c.globalAlpha = 1;
+    // metasoma: five tail segments arch up and forward over the back; higher ones look bigger
+    const raise = 0.55 + 0.2 * fo, sway = Math.sin(this.bob * 1.3) * 0.5, pts = [];
+    let x = -26, y = 0, z = 0;
+    for (let k = 0; k < 6; k++) { const p = 0.2 + k * raise, L = 6.2 - k * 0.2; x -= Math.cos(p) * L; y += sway * 0.6 + Math.sin(this.bob * 2 + k) * 0.2; z += Math.sin(p) * L; pts.push([x, y, z]); }
+    let px = -26, py = 0;
+    for (let k = 0; k < 5; k++) {
+      const [qx, qy, qz] = pts[k], w = (3.7 - k * 0.25) * (1 + qz * 0.012), len = Math.hypot(qx - px, qy - py);
+      c.fillStyle = C.abd; c.strokeStyle = C.rim; c.lineWidth = 1; c.beginPath();
+      c.ellipse((px + qx) / 2, (py + qy) / 2, Math.max(w, len / 2 + 1.2), w, len > 0.5 ? Math.atan2(qy - py, qx - px) : 0, 0, TAU); c.fill(); c.stroke();
+      px = qx; py = qy;
+    }
+    const [tx, ty] = pts[5]; let dx = tx - px, dy = ty - py; const dl = Math.hypot(dx, dy); if (dl < 0.5) { dx = 1; dy = 0; } else { dx /= dl; dy /= dl; }
+    c.fillStyle = C.legB; c.strokeStyle = C.rim; c.beginPath(); c.ellipse(px + dx * 2.5, py + dy * 2.5, 3.4, 2.6, Math.atan2(dy, dx), 0, TAU); c.fill(); c.stroke();
+    c.strokeStyle = C.fang; c.lineWidth = 1.4; c.beginPath(); c.moveTo(px + dx * 5.5, py + dy * 5.5); c.quadraticCurveTo(px + dx * 9, py + dy * 9, px + dx * 9.5 + dy * 2.5, py + dy * 9.5 - dx * 2.5); c.stroke();
+    c.restore();
+    c.fillStyle = C.cheli; c.strokeStyle = C.rim; c.lineWidth = 0.8;   // chelicerae
+    c.beginPath(); c.ellipse(15.5, -1.7, 2.3, 1.3, 0, 0, TAU); c.ellipse(15.5, 1.7, 2.3, 1.3, 0, 0, TAU); c.fill(); c.stroke();
+    c.fillStyle = C.cara; c.strokeStyle = C.rim; c.lineWidth = 1.2;   // carapace
+    c.beginPath(); c.moveTo(14, -4); c.lineTo(14, 4); c.quadraticCurveTo(10, 9, -6, 8.5); c.lineTo(-6, -8.5); c.quadraticCurveTo(10, -9, 14, -4); c.closePath(); c.fill(); c.stroke();
+    this.clipCloud(c, 0, 1);
+    c.strokeStyle = C.groove; c.lineWidth = 0.7; c.beginPath(); c.moveTo(-5, 0); c.lineTo(4, 0); c.stroke();
+    c.fillStyle = '#05070a'; c.beginPath();
+    for (const sd of [-1, 1]) { c.moveTo(7.2, sd * 1.3); c.arc(6, sd * 1.3, 1.2 * G.eye, 0, TAU); for (let k = 0; k < 3; k++) { c.moveTo(13.3 - k * 1.1 + 0.6, sd * (4.3 + k * 0.4)); c.arc(13.3 - k * 1.1, sd * (4.3 + k * 0.4), 0.6, 0, TAU); } }
+    c.fill();
+  }
+  drawLimb(c, limb, widths, C, s, isLeg) {
+    const R = limb.R, Z = limb.Z, n = limb.n;
+    for (let pass = 0; pass < 2; pass++) {
+      for (let k = 0; k < n - 1; k++) {
+        c.beginPath(); c.moveTo(R[k].x, R[k].y - Z[k]); c.lineTo(R[k + 1].x, R[k + 1].y - Z[k + 1]);
+        if (pass === 0) { c.strokeStyle = C.out; c.lineWidth = widths[k] * s + 1.5; }
+        else { c.strokeStyle = (k === 3 || k === 5) ? C.legB : C.legA; c.lineWidth = widths[k] * s + 0.2; }
+        c.stroke();
+      }
+    }
+    // joint nodes
+    c.fillStyle = C.node; c.beginPath();
+    for (let k = 2; k < n - 2; k++) { const r = widths[k] * s * 0.42 + 0.3; c.moveTo(R[k].x + r, R[k].y - Z[k]); c.arc(R[k].x, R[k].y - Z[k], r, 0, TAU); }
+    c.fill();
+    if (isLeg) {
+      // macrosetae spines on tibia & metatarsus
+      c.strokeStyle = C.out; c.lineWidth = 0.6; c.beginPath();
+      for (const k of [4, 5]) {
+        const ax = R[k].x, ay = R[k].y - Z[k], bx = R[k + 1].x, by = R[k + 1].y - Z[k + 1];
+        const dx = bx - ax, dy = by - ay, l = Math.hypot(dx, dy) || 1, nx = -dy / l, ny = dx / l, w = widths[k] * s;
+        for (const t of [0.35, 0.7]) { const px = ax + dx * t, py = ay + dy * t; c.moveTo(px + nx * w * .4, py + ny * w * .4); c.lineTo(px + nx * w * 1.3 + dx / l * 2 * s, py + ny * w * 1.3 + dy / l * 2 * s); }
+      }
+      c.stroke();
+      if (SP.legHair) {   // tarantula: dense setae along the leg
+        c.strokeStyle = C.out; c.lineWidth = 0.45; c.beginPath();
+        for (let k = 2; k < 7; k++) {
+          const ax = R[k].x, ay = R[k].y - Z[k], bx = R[k + 1].x, by = R[k + 1].y - Z[k + 1], dx = bx - ax, dy = by - ay, l = Math.hypot(dx, dy) || 1, nx = -dy / l, ny = dx / l, w = widths[k] * s * 0.5;
+          for (let t = 0.1; t < 1; t += 0.2) for (const sd of [-1, 1]) { const px = ax + dx * t, py = ay + dy * t; c.moveTo(px + nx * w * sd, py + ny * w * sd); c.lineTo(px + nx * (w + 1.6 * s) * sd + dx / l * s, py + ny * (w + 1.6 * s) * sd + dy / l * s); }
+        }
+        c.stroke();
+      }
+      // paired bifurcated tarsal claws
+      const t = R[n - 1], u = R[n - 2], tx = t.x, ty = t.y - Z[n - 1];
+      const dx = tx - u.x, dy = ty - (u.y - Z[n - 2]), l = Math.hypot(dx, dy) || 1, ux = dx / l, uy = dy / l, cl = 2.4 * s + 0.6;
+      c.strokeStyle = C.out; c.lineWidth = 0.8; c.beginPath();
+      for (const sg of [-1, 1]) {
+        const ex = tx + (ux * 0.8 - uy * sg * 0.6) * cl, ey = ty + (uy * 0.8 + ux * sg * 0.6) * cl;
+        c.moveTo(tx, ty); c.quadraticCurveTo(tx + ux * cl, ty + uy * cl, ex, ey);
+      }
+      c.stroke();
+    }
+  }
+  draw(c) {
+    const s = this.scale, C = this.palette(), X = this.cx, Y = this.cy - this.zc;
+    // ground shadows (cheap, flat alpha)
+    c.fillStyle = 'rgba(0,0,0,0.34)'; c.beginPath();
+    c.ellipse(this.cx + 3 * s + this.zc * 0.25, this.cy + 4 * s + this.zc * 0.3, 15 * s, 11 * s, this.heading, 0, TAU); c.fill();
+    const ax = this.cx + Math.cos(this.abdW) * -26 * s, ay = this.cy + Math.sin(this.abdW) * -26 * s;
+    c.beginPath(); c.ellipse(ax + 3 * s + this.zc * .25, ay + 4 * s + this.zc * .3, 15 * s, 10 * s, this.abdW, 0, TAU); c.fill();
+    c.strokeStyle = 'rgba(0,0,0,0.26)'; c.lineWidth = 1.6 * s + 0.4; c.beginPath();
+    for (const L of this.legs) for (let k = 0; k < 8; k++) { const x = L.R[k].x + L.Z[k] * 0.25, y = L.R[k].y + L.Z[k] * 0.3; k ? c.lineTo(x, y) : c.moveTo(x, y); }
+    c.stroke();
+    // stance contact rings
+    c.lineWidth = 0.8;
+    for (const L of this.legs) {
+      if (!L.planted) continue;
+      const r = (2.2 + (1 - L.flash) * 4) * s + 1;
+      c.strokeStyle = L.flash > 0 ? `rgba(217,164,65,${(0.12 + L.flash * 0.45).toFixed(3)})` : 'rgba(217,164,65,0.12)';
+      c.beginPath(); c.ellipse(L.foot.x, L.foot.y, r, r * 0.6, 0, 0, TAU); c.stroke();
+    }
+    c.lineCap = 'round'; c.lineJoin = 'round';
+    // legs: rear pairs first
+    for (const i of this.drawOrder) this.drawLimb(c, this.legs[i], SP.wid, C, s, true);
+    if (!SP.palpTop) this.drawFront(c, C, s);
+    if ((SP.kind === 'spider' || SP.kind === 'jumper') && this.isMale() && this.stage >= ADULT - 1) {   // male palpal bulbs: swelling at sub-adult, full at maturity
+      const br = (this.stage === ADULT ? 2.7 : 1.6) * s + 0.4; c.fillStyle = C.rim; c.strokeStyle = C.node; c.lineWidth = 0.7;
+      for (const p of this.palps) { const t = p.R[p.n - 1], z = p.Z[p.n - 1]; c.beginPath(); c.ellipse(t.x, t.y - z, br, br * 0.8, this.heading, 0, TAU); c.fill(); c.stroke(); }
+    }
+    // body in local frame
+    c.save(); c.translate(X, Y); c.rotate(this.heading); c.scale(s, s);
+    const G = this.genome || {abd: 1, chevrons: 4, eye: 1};
+    const sexAbd = this.stage === ADULT ? (this.isMale() ? 0.82 : 1.15) : 1;
+    const bw = (1 + 0.03 * Math.sin(this.bob)) * (0.9 + 0.2 * (1 - this.hunger)) * G.abd * sexAbd;
+    const rel = (angDiff(this.heading, this.abdW) + Math.sin(this.bob * 3.1) * 0.015) * SP.flex;
+    if (SP.kind === 'beetle') this.drawBeetleBody(c, C, s, G, rel, bw);
+    else if (SP.kind === 'ant') this.drawAntBody(c, C, s, G, rel, bw);
+    else if (SP.kind === 'mantis') this.drawMantisBody(c, C, s, G, rel, bw);
+    else if (SP.kind === 'scorpion') this.drawScorpionBody(c, C, s, G, rel, bw);
+    else this.drawSpiderBody(c, C, s, G, rel, bw);
+    c.restore();
+    if (SP.palpTop) this.drawFront(c, C, s);
     // prey held in chelicerae
     if (this.prey) {
-      const k = 22 * s; const px = X + Math.cos(this.heading) * k, py = Y + Math.sin(this.heading) * k;
+      const k = (SP.head + 2) * s; const px = X + Math.cos(this.heading) * k, py = Y + Math.sin(this.heading) * k;
       drawFlyBody(c, px, py, this.heading + PI, this.prey.sz, null, clamp(1 - this.stateT / 6, 0.4, 1) * Math.max(0.7, s));
     }
     // eye world positions for night eyeshine
     this.eyeW.length = 0;
-    for (const e of [[12.6, 2.0], [8.7, 3.3]]) for (const sd of [-1, 1]) {
+    for (const e of SP.shine) for (const sd of [-1, 1]) {
       const bx = e[0] * s, by = e[1] * sd * s;
       this.eyeW.push(X + bx * this.cs - by * this.sn, Y + bx * this.sn + by * this.cs);
     }
@@ -1737,7 +2027,8 @@ function saveData() {
   return {v: 2, savedAt: gameNow(), genome: s.genome, bornAt: s.bornAt, stageStart: s.stageStart, meals: s.meals,
     egg: e ? {u: e.u, v: e.v, laid: e.laid} : null, stage: s.stage, fresh: +s.fresh.toFixed(3),
     hunger: +s.hunger.toFixed(3), thirst: +s.thirst.toFixed(3), energy: +s.energy.toFixed(3), bond: +s.bond.toFixed(3),
-    stats: s.stats, eggInv: world.eggInv, exuviae: world.exuviae, brain: Brain.serialize()};
+    stats: s.stats, eggInv: world.eggInv, exuviae: world.exuviae, brain: Brain.serialize(),
+    places: {danger: Array.from(world.danger, v => +v.toFixed(2)), food: Array.from(world.yield, v => +v.toFixed(2))}};
 }
 function save() {
   if (suppressSave) return;
@@ -1745,8 +2036,9 @@ function save() {
   if (typeof Online !== 'undefined') Online.queue(false);
 }
 function load() {
-  let d = null;
-  try { d = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch (e) {}
+  let d = null, raw = null;
+  try { raw = localStorage.getItem(SAVE_KEY); d = JSON.parse(raw || 'null'); } catch (e) {}
+  try { if (d && d.brain && !d.brain.nn && !localStorage.getItem(SAVE_KEY + '.backup-brain1')) localStorage.setItem(SAVE_KEY + '.backup-brain1', raw); } catch (e) {}   // rollback copy
   if (!d) return false;
   const s = spider, now = gameNow();
   try {
@@ -1770,6 +2062,7 @@ function load() {
     if (d.stats) s.stats = {meals: d.stats.meals | 0, hunts: d.stats.hunts | 0, catches: d.stats.catches | 0};
     if (Array.isArray(d.eggInv)) world.eggInv = d.eggInv.slice(0, 12);
     Brain.restore(d.brain);
+    if (d.places && d.places.danger && d.places.danger.length === GW * GH) { world.danger.set(d.places.danger); world.yield.set(d.places.food); }   // remembered places (they only fade while you watch)
   } catch (e) { return false; }
   return true;
 }
@@ -1790,7 +2083,8 @@ function hatch() {
   s.pos.x = p.x; s.pos.y = p.y; s.vel.x = s.vel.y = 0; s.heading = rnd(0, TAU); s.abdW = s.heading; s.scale = s.targetScale() * 0.55; s.fresh = 1; s.softT = 6;
   s.updateBody(0.016); s.placeLegs(); s.enter('PATROL'); s.pause = 2;
   for (let i = 0; i < 9; i++) { const a = rnd(0, TAU), v = rnd(60, 120); world.parts.push({x: p.x, y: p.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: rnd(2.5, 4), t: 'ling', a}); }
-  world.parts.push({x: p.x, y: p.y - 26, vy: -14, life: 3, t: `${s.genome.name} hatched!`, big: true});
+  world.parts.push({x: p.x, y: p.y - 40, vy: -14, life: 4.5, t: `It's a ${SP.name}!`, big: true});
+  world.parts.push({x: p.x, y: p.y - 24, vy: -14, life: 4.5, t: `${s.genome.name} · ${SP.rarity.toUpperCase()}`, col: RARITY_COL[SP.rarity]});
   if (typeof Online !== 'undefined') Online.queue(true);
   for (let i = 0; i < 2; i++) {   // a first meal: a couple of flies settle nearby
     const a = rnd(0, TAU), r = rnd(120, 200), fx = clamp(p.x + Math.cos(a) * r, arena.x + 20, arena.x + arena.w - 20), fy = clamp(p.y + Math.sin(a) * r, arena.y + 20, arena.y + arena.h - 20);
@@ -1822,8 +2116,9 @@ function drawEgg(c) {
   c.strokeStyle = 'rgba(160,150,130,0.8)'; c.lineWidth = 1; c.beginPath(); c.arc(0, 0, 15, 0, TAU); c.stroke();
   if (left < EGG_MS * 0.35) { c.strokeStyle = 'rgba(60,45,30,0.8)'; c.beginPath(); const k = 1 - left / (EGG_MS * 0.35); c.moveTo(-8 * k, -10); c.lineTo(-2, -4); c.lineTo(3 * k, -9); c.lineTo(7 * k, -2); c.stroke(); }
   c.fillStyle = 'rgba(255,255,255,0.6)'; c.beginPath(); c.arc(-5, -6, 3, 0, TAU); c.fill();
+  c.fillStyle = 'rgba(60,45,30,0.75)'; c.font = 'bold 13px ui-monospace,Menlo,monospace'; c.textAlign = 'center'; c.fillText('?', 1, 5); c.textAlign = 'start'; c.font = '10px ui-monospace,Menlo,Consolas,monospace';
   c.restore();
-  c.fillStyle = '#9fb3c8'; c.textAlign = 'center'; c.fillText(`${spider.genome.name}'s egg sac · ${fmtDur(left)}`, p.x, p.y + 30); c.textAlign = 'start';
+  c.fillStyle = '#9fb3c8'; c.textAlign = 'center'; c.fillText(`mystery egg · ${fmtDur(left)}`, p.x, p.y + 30); c.textAlign = 'start';
 }
 
 // ============================================================ boot
@@ -1862,7 +2157,7 @@ function updateSoundBtn() {   // tells the truth: audio isn't running until a ta
   if (el.dataset.t !== t) { el.dataset.t = t; el.innerHTML = '<kbd>M</kbd>' + t; el.classList.toggle('on', Snd.muted || !running); }
 }
 $('night').onclick = toggleNight; $('senses').onclick = toggleSenses; $('mute').onclick = toggleMute;
-$('reset').onclick = () => { if (!confirm('Lay a new egg? Your current spider, its memories and shed skins will be gone for good.')) return; try { localStorage.removeItem(SAVE_KEY); } catch (e) {} location.reload(); };
+$('reset').onclick = () => { if (!confirm('Lay a new mystery egg? Your current critter, its memories and shed skins will be gone for good.')) return; try { localStorage.removeItem(SAVE_KEY); } catch (e) {} location.reload(); };
 $('col').onclick = () => { $('hud').classList.toggle('min'); $('col').textContent = $('hud').classList.contains('min') ? '+' : '–'; };
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
@@ -1912,7 +2207,7 @@ function updateWorld(dt) {
   const alive = world.flies.filter(f => !f.dead).length;
   if (world.spawnT <= 0) {
     world.spawnT = rnd(7, 14);
-    if (alive < 2 + (spider.hunger > 0.5 ? 1 : 0) && !world.night) {
+    if (alive < 2 + (spider.hunger > 0.5 ? 1 : 0) && (!world.night || (!world.egg && SP.nocturnal))) {
       const side = Math.random() * 4 | 0;
       const x = side === 0 ? arena.x + 8 : side === 1 ? arena.x + arena.w - 8 : rnd(arena.x, arena.x + arena.w);
       const y = side === 2 ? arena.y + 8 : side === 3 ? arena.y + arena.h - 8 : rnd(arena.y, arena.y + arena.h);
@@ -2009,7 +2304,7 @@ function drawCPG(c) {
   c.beginPath(); c.rect(0.5, 0.5, 175, 261); c.fill(); c.stroke();
   c.fillStyle = '#6b7987'; c.font = '10px ui-monospace,Menlo,Consolas,monospace'; c.fillText('CENTRAL PATTERN GENERATOR', 10, 16);
   // node layout: legs L1..L4 left column, R1..R4 right column; head at top
-  const NX = i => i < 4 ? 62 : 114, NY = i => 50 + (i % 4) * 46, R = 12;
+  const N = L.length, NX = i => i < NP ? 62 : 114, NY = i => 50 + (i % NP) * 46 + (4 - NP) * 23, R = 12;
   const act = clamp(sp.cpgK / 3.2, 0, 1);
   // links: curved arcs, brightness = coupling drive, lens-shaped double arcs for ipsi/contra like a neural ladder
   for (const ln of CPG_LINKS) {
@@ -2018,7 +2313,7 @@ function drawCPG(c) {
     c.strokeStyle = `rgba(52,52,255,${al.toFixed(3)})`; c.lineWidth = ln.kind === 'diag' ? 1 : 1.3;
     const mx = (ax + bx) / 2, my = (ay + by) / 2;
     c.beginPath();
-    if (ln.kind === 'long') { const o = ln.a < 4 ? -34 : 34; c.moveTo(ax, ay); c.quadraticCurveTo(mx + o, my, bx, by); }
+    if (ln.kind === 'long') { const o = ln.a < NP ? -34 : 34; c.moveTo(ax, ay); c.quadraticCurveTo(mx + o, my, bx, by); }
     else if (ln.kind === 'diag') { c.moveTo(ax, ay); c.quadraticCurveTo(mx, my + 8, bx, by); }
     else { const vx = -(by - ay) * 0.12, vy = (bx - ax) * 0.12; c.moveTo(ax, ay); c.quadraticCurveTo(mx + vx, my + vy, bx, by); c.moveTo(ax, ay); c.quadraticCurveTo(mx - vx, my - vy, bx, by); }
     c.stroke();
@@ -2034,13 +2329,13 @@ function drawCPG(c) {
   }
   c.fill();
   // oscillator nodes: ring = limit cycle, orange dot = live (x, y) state; filled when the leg is in stance
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < N; i++) {
     const l = L[i], x = NX(i), y = NY(i);
     if (l.planted) { c.fillStyle = 'rgba(255,59,48,0.16)'; c.beginPath(); c.arc(x, y, R, 0, TAU); c.fill(); }
     c.strokeStyle = l.planted ? '#ff3b30' : 'rgba(255,59,48,0.55)'; c.lineWidth = 1.4; c.beginPath(); c.arc(x, y, R, 0, TAU); c.stroke();
     c.strokeStyle = 'rgba(255,59,48,0.25)'; c.lineWidth = 1; c.beginPath(); c.moveTo(x - R, y); c.lineTo(x + R, y); c.stroke();
     c.fillStyle = '#ffb02e'; c.beginPath(); c.arc(x + l.ox * R, y + l.oy * R, 3.2, 0, TAU); c.fill();
-    c.fillStyle = '#6b7987'; c.fillText(LEG_NAMES[i], i < 4 ? x - 38 : x + 18, y + 3);
+    c.fillStyle = '#6b7987'; c.fillText(LEG_NAMES[i], i < NP ? x - 38 : x + 18, y + 3);
   }
   c.fillStyle = '#8f9cab';
   c.fillText('drive ' + sp.gaitF.toFixed(2) + ' Hz  duty ' + STANCE.toFixed(2), 10, 236);
@@ -2056,36 +2351,32 @@ function drawBrain(c) {
   c.fillStyle = 'rgba(3,4,8,0.88)'; c.strokeStyle = '#1e2731'; c.lineWidth = 1; c.beginPath(); c.rect(0.5, 0.5, pw - 1, ph - 1); c.fill(); c.stroke();
   c.font = '10px ui-monospace,Menlo,Consolas,monospace'; c.textAlign = 'start';
   c.fillStyle = '#6b7987'; c.fillText('BRAIN', 10, 16); c.fillStyle = '#d9a441'; c.textAlign = 'right'; c.fillText(Brain.label(), pw - 10, 16); c.textAlign = 'start';
-  // -- neural net 8-8-1
-  const lv = Brain.live, X = lv.x, Hh = lv.h, inX = 62, hX = 132, oX = 196, y0 = 34, dy = 14;
-  const iy = i => y0 + i * dy, hy = j => y0 + j * dy;
-  for (let j = 0; j < NN_H; j++) for (let i = 0; i < NN_IN; i++) {
-    const w = Brain.W1[j][i], a = Math.min(0.75, Math.abs(w) * 0.35);
-    if (a < 0.04) continue;
-    c.strokeStyle = w > 0 ? `rgba(60,90,255,${a.toFixed(3)})` : `rgba(255,120,60,${a.toFixed(3)})`; c.lineWidth = 0.4 + Math.min(1.6, Math.abs(w) * 0.6);
-    c.beginPath(); c.moveTo(inX, iy(i)); c.lineTo(hX, hy(j)); c.stroke();
+  // -- neural net 12-16-8-1
+  const lv = Brain.live, act = lv.active ? 1 : 0.35, colX = [60, 108, 156, 204], y0 = 30, span = 112;
+  const ny = (l, j) => { const n = NN_LAYERS[l]; return n === 1 ? y0 + span / 2 : y0 + j * span / (n - 1); };
+  const val = (l, j) => l ? lv.acts[l - 1][j] : lv.x[j];
+  for (let l = 0; l < NN_DEPTH; l++) {
+    const nIn = NN_LAYERS[l], W = Brain.W[l];
+    for (let j = 0; j < NN_LAYERS[l + 1]; j++) for (let i = 0; i < nIn; i++) {
+      const w = W[j * nIn + i], a = Math.min(0.7, Math.abs(w) * 0.3);
+      if (a < 0.06) continue;
+      c.strokeStyle = w > 0 ? `rgba(60,90,255,${a.toFixed(3)})` : `rgba(255,120,60,${a.toFixed(3)})`; c.lineWidth = 0.3 + Math.min(1.4, Math.abs(w) * 0.5);
+      c.beginPath(); c.moveTo(colX[l], ny(l, i)); c.lineTo(colX[l + 1], ny(l + 1, j)); c.stroke();
+    }
   }
-  const oy = y0 + 3.5 * dy;
-  for (let j = 0; j < NN_H; j++) {
-    const w = Brain.W2[j], a = Math.min(0.85, Math.abs(w) * 0.3);
-    c.strokeStyle = w > 0 ? `rgba(60,90,255,${a.toFixed(3)})` : `rgba(255,120,60,${a.toFixed(3)})`; c.lineWidth = 0.5 + Math.min(2, Math.abs(w) * 0.5);
-    c.beginPath(); c.moveTo(hX, hy(j)); c.lineTo(oX, oy); c.stroke();
+  c.font = '9px ui-monospace,Menlo,Consolas,monospace';
+  for (let l = 0; l < NN_DEPTH; l++) for (let j = 0; j < NN_LAYERS[l]; j++) {
+    const v = clamp(val(l, j), -1, 1) * act, y = ny(l, j);
+    c.fillStyle = l === 0 ? `rgba(255,176,46,${(0.12 + 0.8 * Math.abs(v)).toFixed(3)})` : v >= 0 ? `rgba(90,120,255,${(0.15 + 0.8 * v).toFixed(3)})` : `rgba(255,130,70,${(0.15 - 0.8 * v).toFixed(3)})`;
+    c.beginPath(); c.arc(colX[l], y, l === 1 ? 3 : 3.6, 0, TAU); c.fill(); c.strokeStyle = '#ff3b30'; c.lineWidth = 0.9; c.stroke();
+    if (l === 0) { c.fillStyle = '#6b7987'; c.fillText(NN_LABELS[j], 10, y + 3); }
   }
-  const act = lv.active ? 1 : 0.35;
-  for (let i = 0; i < NN_IN; i++) {
-    const v = clamp(Math.abs(X[i]), 0, 1) * act;
-    c.fillStyle = `rgba(255,176,46,${(0.12 + 0.8 * v).toFixed(3)})`; c.beginPath(); c.arc(inX, iy(i), 4.2, 0, TAU); c.fill();
-    c.strokeStyle = '#ff3b30'; c.lineWidth = 1; c.stroke();
-    c.fillStyle = '#6b7987'; c.fillText(NN_LABELS[i], 10, iy(i) + 3);
-  }
-  for (let j = 0; j < NN_H; j++) {
-    const v = Hh[j] * act; c.fillStyle = v >= 0 ? `rgba(90,120,255,${(0.15 + 0.8 * v).toFixed(3)})` : `rgba(255,130,70,${(0.15 - 0.8 * v).toFixed(3)})`;
-    c.beginPath(); c.arc(hX, hy(j), 4.6, 0, TAU); c.fill(); c.strokeStyle = '#ff3b30'; c.stroke();
-  }
-  c.fillStyle = `rgba(255,176,46,${(0.2 + 0.8 * lv.p * act).toFixed(3)})`; c.beginPath(); c.arc(oX, oy, 9, 0, TAU); c.fill(); c.strokeStyle = '#ff3b30'; c.lineWidth = 1.4; c.stroke();
-  c.fillStyle = '#e6edf3'; c.textAlign = 'center'; c.fillText(lv.active ? Math.round(lv.p * 100) + '%' : '—', oX, oy + 22); c.fillStyle = '#6b7987'; c.fillText('P(catch)', oX, oy - 14); c.textAlign = 'start';
+  c.font = '10px ui-monospace,Menlo,Consolas,monospace';
+  const ox = colX[3], oy = ny(3, 0);
+  c.fillStyle = `rgba(255,176,46,${(0.2 + 0.8 * lv.p * act).toFixed(3)})`; c.beginPath(); c.arc(ox, oy, 9, 0, TAU); c.fill(); c.strokeStyle = '#ff3b30'; c.lineWidth = 1.4; c.stroke();
+  c.fillStyle = '#e6edf3'; c.textAlign = 'center'; c.fillText(lv.active ? Math.round(lv.p * 100) + '%' : '—', ox, oy + 22); c.fillStyle = '#6b7987'; c.fillText('P(catch)', ox, oy - 14); c.textAlign = 'start';
   c.fillStyle = '#8f9cab';
-  c.fillText(`strike model · ${Brain.samples} lunges · acc ${Brain.recent.length ? Math.round(Brain.accuracy() * 100) + '%' : '—'}`, 10, 160);
+  c.fillText(`12·16·8·1 · ${Brain.samples} lunges · acc ${Brain.recent.length ? Math.round(Brain.accuracy() * 100) + '%' : '—'} · ${Brain.dreams} dreams`, 10, 160);
   // -- tactics table
   const tx0 = 64, cw = 45, ty0 = 180;
   c.fillStyle = '#6b7987'; c.fillText('TACTICS', 10, ty0);
@@ -2125,7 +2416,6 @@ const THEMES = [null,
   {name: 'Lime',   main: [122, 226, 106], acc: [255, 216, 76],  joint: '#f0ffe8', dim: '#11251a'}];
 const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 const FIELD_NOTES = [
-  'Lycosidae (wolf spiders): eight eyes in three rows; the large posterior median pair faces forward.',
   'Spiders lack extensor muscles at two leg joints: legs straighten by hemolymph pressure, a hydraulic skeleton.',
   'Trichobothria are fine hairs that register air currents and substrate vibration.',
   'Leg segments: coxa · trochanter · femur · patella · tibia · metatarsus · tarsus.',
@@ -2141,9 +2431,9 @@ let notesKey = '';
 function drawNotes(c, th) {   // static lab-notebook layer, drawn as a handful of vectors each frame
   if (W >= 700) {   // lab-notebook text, top-right, clear of the HUD and panels
     c.fillStyle = th.dim; c.textAlign = 'right'; const x0 = W - 30, lh = 20; let y = 70;
-    c.font = '10px ui-monospace,Menlo,Consolas,monospace'; c.fillText('FIELD NOTES · ARANEAE / LYCOSIDAE · ' + spider.genome.name.toUpperCase(), x0, y - 8); y += 14;
+    c.font = '10px ui-monospace,Menlo,Consolas,monospace'; c.fillText('FIELD NOTES · ' + SP.latin.toUpperCase() + ' · ' + spider.genome.name.toUpperCase(), x0, y - 8); y += 14;
     c.font = 'italic 13px Georgia,"Times New Roman",serif';
-    for (const line of FIELD_NOTES) { c.fillText(line, x0, y); y += lh; }
+    for (const line of [SP.note, ...FIELD_NOTES]) { c.fillText(line, x0, y); y += lh; }
     c.textAlign = 'start';
   }
   c.strokeStyle = th.dim; c.lineWidth = 1; c.beginPath();   // arena corner brackets
@@ -2161,12 +2451,23 @@ function segBox(c, ax, ay, bx, by, w) {
   c.moveTo(ax + nx, ay + ny); c.lineTo(bx + nx, by + ny); c.lineTo(bx - nx, by - ny); c.lineTo(ax - nx, ay - ny); c.closePath();
 }
 function neon(c, col, a, w) { c.strokeStyle = rgba(col, a * 0.16); c.lineWidth = w + 2.6; c.stroke(); c.strokeStyle = rgba(col, a); c.lineWidth = w; c.stroke(); }
+const SCHEM = {   // neon-style body boxes per body plan: fore [x,y,w,h] rects, inner rect, eye [x,|y|,r], abdomen segs [rightX, width, height]
+  spider: {fore: [[-12, -10.5, 27, 21], [12, -4.5, 7, 3.6], [12, 0.9, 7, 3.6]], inner: [-6, -6.5, 15, 13], eyes: [[12.6, 2, 1.8], [8.7, 3.3, 1.3], [12, 4.4, .8], [6.2, 5.6, .9]],
+    segs: [[-3, 9, 15], [-12.5, 9.5, 18], [-22.5, 9, 15], [-31, 7, 9]]},
+  jumper: {fore: [[-12, -10.5, 27, 21], [12, -4.5, 7, 3.6], [12, 0.9, 7, 3.6]], inner: [-6, -6.5, 15, 13], eyes: [[13.2, 2.6, 2.8], [12.3, 6, 1.2], [4, 6.4, 1]],
+    segs: [[-3, 9, 14], [-12, 10, 17], [-22, 8, 12]]},
+  beetle: {fore: [[1, -9, 12, 18], [12, -5, 10, 10]], inner: [3, -5, 8, 10], eyes: [[18, 4.3, 1.6]], segs: [[-1, 10, 20], [-11, 10, 20], [-21, 9, 15]]},
+  ant: {fore: [[-2, -3.4, 14, 6.8], [11, -6, 12, 12]], inner: [13, -4, 8, 8], eyes: [[17.5, 4.9, 1.4]], segs: [[-1, 21, 15]]},
+  mantis: {fore: [[1, -3.6, 8, 7.2], [8, -2, 20, 4], [26, -6, 9, 12]], inner: [27, -4, 6, 8], eyes: [[28.5, 5.3, 2]], segs: [[-1, 12, 9], [-13, 12, 10], [-25, 14, 7]]},
+  scorpion: {fore: [[-6, -8.5, 20, 17]], inner: [-2, -5, 12, 10], eyes: [[6, 1.3, 1.2], [13, 4.5, .7]],
+    segs: [[-1, 9, 16], [-10, 9, 15], [-19, 8, 12], [-27, 6, 5], [-33, 6, 4.6], [-39, 6, 4.2], [-45, 6, 3.8]]},
+};
 function drawSchematicSpider(c, th) {
   const S = spider, sc = S.scale, M = th.main, A = th.acc, vis = 1 - 0.6 * S.camo;   // camouflage = fades out
   // limbs as chains of segment boxes
   c.beginPath();
-  for (const L of S.legs) for (let k = 0; k < 7; k++) segBox(c, L.R[k].x, L.R[k].y - L.Z[k], L.R[k + 1].x, L.R[k + 1].y - L.Z[k + 1], (LEG_W[k] * 1.9 + 1.4) * sc + 1);
-  for (const P of S.palps) for (let k = 0; k < 6; k++) segBox(c, P.R[k].x, P.R[k].y - P.Z[k], P.R[k + 1].x, P.R[k + 1].y - P.Z[k + 1], (PALP_W[k] * 1.5 + 1) * sc + 0.8);
+  for (const L of S.legs) for (let k = 0; k < 7; k++) segBox(c, L.R[k].x, L.R[k].y - L.Z[k], L.R[k + 1].x, L.R[k + 1].y - L.Z[k + 1], (SP.wid[k] * 1.9 + 1.4) * sc + 1);
+  for (const P of S.palps) for (let k = 0; k < 6; k++) segBox(c, P.R[k].x, P.R[k].y - P.Z[k], P.R[k + 1].x, P.R[k + 1].y - P.Z[k + 1], (SP.palp.wid[k] * 1.5 + 1) * sc + 0.8);
   neon(c, M, 0.85 * vis, 0.9);
   // dotted spine through every joint
   c.beginPath();
@@ -2181,16 +2482,17 @@ function drawSchematicSpider(c, th) {
   neon(c, A, 0.5 * vis, 0.7);
   // body in local frame: nested boxes
   c.save(); c.translate(S.cx, S.cy - S.zc); c.rotate(S.heading); c.scale(sc, sc);
-  c.beginPath(); c.rect(-12, -10.5, 27, 21); c.rect(12, -4.5, 7, 3.6); c.rect(12, 0.9, 7, 3.6); c.fillStyle = '#000'; c.fill();
-  c.rect(-6, -6.5, 15, 13); neon(c, M, vis, 1.1 / sc);
-  c.fillStyle = rgba(A, 0.14 * vis); c.fillRect(-6, -6.5, 15, 13);
+  const B = SCHEM[SP.kind] || SCHEM.spider, inn = B.inner;   // unknown body plans fall back to the spider
+  c.beginPath(); for (const r of B.fore) c.rect(r[0], r[1], r[2], r[3]); c.fillStyle = '#000'; c.fill();
+  c.rect(inn[0], inn[1], inn[2], inn[3]); neon(c, M, vis, 1.1 / sc);
+  c.fillStyle = rgba(A, 0.14 * vis); c.fillRect(inn[0], inn[1], inn[2], inn[3]);
   c.fillStyle = rgba(A, vis); c.beginPath();
-  for (const [ex, ey, er] of [[12.6, 2, 1.8], [12.6, -2, 1.8], [8.7, 3.3, 1.3], [8.7, -3.3, 1.3], [12, 4.4, .8], [12, -4.4, .8], [6.2, 5.6, .9], [6.2, -5.6, .9]]) { c.moveTo(ex + er, ey); c.arc(ex, ey, er, 0, TAU); }
+  for (const [ex, ey, er] of B.eyes) for (const sd of [-1, 1]) { c.moveTo(ex + er, ey * sd); c.arc(ex, ey * sd, er, 0, TAU); }
   c.fill();
-  c.translate(-12.5, 0); c.rotate(angDiff(S.heading, S.abdW));
+  c.translate(SP.abdX, 0); c.rotate(angDiff(S.heading, S.abdW) * SP.flex);
   const bw = (1 + 0.03 * Math.sin(S.bob)) * (0.9 + 0.2 * (1 - S.hunger));
   c.beginPath(); c.rect(-2.5, -2.5, 3, 5);
-  const segs = [[-3, 9, 15], [-12.5, 9.5, 18], [-22.5, 9, 15], [-31, 7, 9]];
+  const segs = B.segs;
   for (const [x, w2, h2] of segs) c.rect(x - w2, -h2 / 2 * bw, w2, h2 * bw);
   c.fillStyle = '#000'; c.fill(); neon(c, M, vis, 1.1 / sc);
   if (S.display > 0.02) {   // passing-cloud bands as sweeping highlighted boxes
@@ -2199,7 +2501,7 @@ function drawSchematicSpider(c, th) {
   }
   c.fillStyle = th.joint; c.beginPath(); for (const [x, w2] of segs) { c.moveTo(x - w2 / 2 + 1, 0); c.arc(x - w2 / 2, 0, 1, 0, TAU); } c.fill();
   c.restore();
-  if (S.prey) { const k = 22 * sc, px = S.cx + Math.cos(S.heading) * k, py = S.cy - S.zc + Math.sin(S.heading) * k; c.beginPath(); c.rect(px - 3, py - 3, 6, 6); neon(c, A, 0.9, 0.8); }
+  if (S.prey) { const k = (SP.head + 2) * sc, px = S.cx + Math.cos(S.heading) * k, py = S.cy - S.zc + Math.sin(S.heading) * k; c.beginPath(); c.rect(px - 3, py - 3, 6, 6); neon(c, A, 0.9, 0.8); }
 }
 function drawSchematicFly(c, f, th) {
   if (f.caught) return;
@@ -2221,14 +2523,14 @@ function drawSchematicEgg(c, th) {
   neon(c, th.main, 0.85, 0.8);
   c.beginPath(); c.arc(p.x, p.y, 29, -PI / 2, -PI / 2 + k * TAU); neon(c, th.acc, 0.9, 1);
   c.fillStyle = rgba(th.main, 0.9); c.textAlign = 'center'; c.font = '10px ui-monospace,Menlo,Consolas,monospace';
-  c.fillText(`OOTHECA · ${spider.genome.name.toUpperCase()} · T-${fmtDur(left)}`, p.x, p.y + 46); c.textAlign = 'start';
+  c.fillText(`MYSTERY EGG · SPECIES ??? · T-${fmtDur(left)}`, p.x, p.y + 46); c.textAlign = 'start';
 }
 function label(c, th, x, y, dx, dy, text) {
   c.strokeStyle = rgba(th.main, 0.55); c.lineWidth = 0.7; c.beginPath(); c.moveTo(x, y); c.lineTo(x + dx, y + dy); c.lineTo(x + dx + Math.sign(dx) * 14, y + dy); c.stroke();
   c.fillStyle = rgba(th.main, 0.95); c.textAlign = dx < 0 ? 'right' : 'left'; c.fillText(text, x + dx + Math.sign(dx) * 17, y + dy + 3); c.textAlign = 'start';
 }
 function renderSchematic() {
-  const c = ctx, th = THEMES[world.style], key = world.style + ':' + cvs.width + 'x' + cvs.height + ':' + spider.genome.name;
+  const c = ctx, th = THEMES[world.style], key = world.style + ':' + cvs.width + 'x' + cvs.height + ':' + spider.genome.name + ':' + SP.name;
   const t = tctx;
   if (notesKey !== key) { notesKey = key; trailCv.width = cvs.width; trailCv.height = cvs.height; t.fillStyle = '#000'; t.fillRect(0, 0, trailCv.width, trailCv.height); }
   // persistence layer (opaque black): creatures leave fading afterimages
@@ -2263,7 +2565,7 @@ function renderSchematic() {
     const S = spider, X = S.cx, Y = S.cy - S.zc, ep = Brain.episode;
     label(c, th, X, Y, 46, -58, `${S.genome.name.toUpperCase()} · ${STAGES[S.stage].name.split(' · ')[0].toUpperCase()}`);
     label(c, th, X, Y, 46, -46, `${S.state}${ep ? ' / ' + TACTICS[ep.tactic].toUpperCase() : ''}`);
-    for (const i of [0, 7]) {
+    for (const i of [0, S.legs.length - 1]) {
       const L = S.legs[i], f = L.R[4], y = f.y - L.Z[4], dx = (L.side < 0 ? -1 : 1) * 30;
       label(c, th, f.x, y, dx, i === 0 ? -22 : 22, `${L.name} φ${L.phase.toFixed(2)} ${L.planted ? 'STANCE' : 'SWING'}`);
     }
@@ -2319,7 +2621,7 @@ function render() {
       for (let k = 0; k < 4; k++) { const a = p.a + 0.6 + k * 0.6 + Math.sin(world.time * 30 + k) * 0.2; c.moveTo(p.x, p.y); c.lineTo(p.x + Math.cos(a) * 4, p.y + Math.sin(a) * 4); c.moveTo(p.x, p.y); c.lineTo(p.x - Math.cos(a) * 4, p.y - Math.sin(a) * 4); }
       c.stroke(); c.fillStyle = '#4a3a2b'; c.beginPath(); c.arc(p.x, p.y, 1.8, 0, TAU); c.fill(); continue;
     }
-    c.fillStyle = p.t === '♥' ? '#d77fb4' : p.big ? '#f0c46a' : '#9fb3c8';
+    c.fillStyle = p.col || (p.t === '♥' ? '#d77fb4' : p.big ? '#f0c46a' : '#9fb3c8');
     c.font = p.big ? '12px ui-monospace,Menlo,monospace' : '11px ui-monospace,Menlo,monospace';
     c.fillText(p.t, p.x, p.y);
   }
@@ -2332,18 +2634,20 @@ function render() {
 
 // ============================================================ HUD
 const hudEls = {};
-['stage', 'st', 'mind', 'vh', 'bh', 'vt', 'bt', 've', 'be', 'vb', 'bb', 'vx', 'bx', 'age', 'fps'].forEach(id => hudEls[id] = $(id));
+['stage', 'spc', 'st', 'mind', 'vh', 'bh', 'vt', 'bt', 've', 'be', 'vb', 'bb', 'vx', 'bx', 'age', 'fps'].forEach(id => hudEls[id] = $(id));
 function updateHUD(fps) {
   const s = spider, pct = v => Math.round(v * 100) + '%', now = gameNow(), G = s.genome;
   const sym = G.sex === 'male' ? '♂' : '♀';
   if (world.egg) {
     const left = world.egg.laid + EGG_MS - now;
-    hudEls.stage.textContent = `${G.name} ${sym} · egg sac`;
+    hudEls.stage.textContent = 'mystery egg';
+    hudEls.spc.textContent = '??? (hatch to find out)'; hudEls.spc.style.color = '';
     hudEls.st.textContent = 'EGG · hatching in ' + fmtDur(left);
     hudEls.vx.textContent = 'incubating'; hudEls.bx.style.width = pct(clamp(1 - left / EGG_MS, 0, 1));
-    hudEls.age.textContent = G.morph + ' morph · not yet hatched';
+    hudEls.age.textContent = 'not yet hatched';
   } else {
     hudEls.stage.textContent = `${G.name} ${sym} · ${STAGES[s.stage].name}`;
+    hudEls.spc.textContent = `${SP.name} · ${SP.rarity}`; hudEls.spc.style.color = RARITY_COL[SP.rarity];
     hudEls.st.textContent = s.state + (s.sub ? ' · ' + s.sub : '') + (Brain.episode ? ' · ' + TACTICS[Brain.episode.tactic] : '');
     const mi = s.moltInfo(now);
     if (!mi) { hudEls.vx.textContent = 'mature'; hudEls.bx.style.width = '100%'; }
@@ -2382,8 +2686,8 @@ function breed(a, b, seed) {
   let name = syl(pick().name).slice(0, 2 + (r() * 2 | 0)) + syl(pick().name).slice(-(2 + (r() * 2 | 0)));
   name = (name[0] || 'x').toUpperCase() + name.slice(1);
   const trait = k => clamp(((a.traits || {})[k] + (b.traits || {})[k]) / 2 + gauss() * 0.08, 0.1, 0.9);
-  return {gen: Math.max(a.gen || 1, b.gen || 1) + 1, parents: [a.name, b.name], name, sex: r() < 0.5 ? 'female' : 'male',
-    morph: morphP.morph, hue: morphP.hue + gauss() * 3, sat: clamp(morphP.sat + gauss() * 0.02, 0.03, 0.6), lit: clamp(morphP.lit + gauss() * 0.01, 0.12, 0.32),
+  return {species: a.species || 'wolf', gen: Math.max(a.gen || 1, b.gen || 1) + 1, parents: [a.name, b.name], name, sex: r() < 0.5 ? 'female' : 'male',
+    morph: morphP.morph, hue: morphP.hue + gauss() * 3, sat: clamp(morphP.sat + gauss() * 0.02, 0.03, 0.7), lit: clamp(morphP.lit + gauss() * 0.01, 0.06, 0.34),
     contrast: mix('contrast', 0.05, 0.7, 1.35), size: mix('size', 0.02, 0.88, 1.14), leg: mix('leg', 0.02, 0.9, 1.12), eye: mix('eye', 0.03, 0.85, 1.2),
     abd: mix('abd', 0.03, 0.85, 1.18), speed: mix('speed', 0.02, 0.88, 1.12), chevrons: r() < 0.08 ? 3 + (r() * 3 | 0) : pick().chevrons,
     traits: {bold: trait('bold'), curious: trait('curious'), active: trait('active'), affection: trait('affection')}};
@@ -2477,6 +2781,7 @@ var Online = {   // var: the save() hooks check for it before this point runs
     const s = spider, g = s.genome;
     if (world.egg || s.stage !== ADULT) return this.fail('Your spider must be a mature adult to court.');
     if (!other.adult || other.sex === g.sex) return this.fail('Courtship needs a mature adult of the opposite sex.');
+    if (((other.genome || {}).species || 'wolf') !== g.species) return this.fail('Courtship only works within the same species.');
     if (this.outgoing.some(m => m.to === other.owner && m.status === 'pending')) return this.fail('You already have a pending request with them.');
     const {fs, db} = this.fb;
     await fs.addDoc(fs.collection(db, 'matings'), {from: this.user.uid, to: other.owner, fromName: this.name, toName: other.ownerName,
@@ -2485,7 +2790,7 @@ var Online = {   // var: the save() hooks check for it before this point runs
   },
   async answer(id, ok) {
     const {fs, db} = this.fb, m = this.incoming.find(x => x.id === id); if (!m) return;
-    if (ok && (world.egg || spider.stage !== ADULT || spider.genome.sex === m.fromSpider.genome.sex)) return this.fail('Your spider must be a mature adult of the opposite sex to accept.');
+    if (ok && (world.egg || spider.stage !== ADULT || spider.genome.sex === m.fromSpider.genome.sex || (m.fromSpider.genome.species || 'wolf') !== spider.genome.species)) return this.fail('Your spider must be a mature adult of the opposite sex to accept.');
     await fs.updateDoc(fs.doc(db, 'matings', id), ok ? {status: 'accepted', toSpider: {name: spider.genome.name, genome: spider.genome}} : {status: 'declined'});
   },
   claimEggs() {   // each partner gets their own sibling egg sac from an accepted courtship
@@ -2524,7 +2829,8 @@ var Online = {   // var: the save() hooks check for it before this point runs
   spiderLine(d) {
     const st = d.stage < 0 ? 'egg sac' : STAGES[clamp(d.stage | 0, 0, ADULT)].name, sym = d.sex === 'male' ? '♂' : '♀';
     const age = d.bornAt ? fmtDur(gameNow() - d.bornAt) : '—';
-    return `<span class="sw" style="background:${esc(this.swatch(d.genome))}"></span><span class="grow"><b>${esc(d.name)}</b> ${sym} · ${esc(st)}<br><span class="muted">by ${esc(d.ownerName)} · gen ${esc(d.gen || 1)} · age ${esc(age)} · ${esc((d.stats || {}).catches || 0)} catches</span></span>`;
+    const spn = (SPECIES[(d.genome || {}).species] || SPECIES.wolf).name;
+    return `<span class="sw" style="background:${esc(this.swatch(d.genome))}"></span><span class="grow"><b>${esc(d.name)}</b> ${sym} · ${esc(spn)} · ${esc(st)}<br><span class="muted">by ${esc(d.ownerName)} · gen ${esc(d.gen || 1)} · age ${esc(age)} · ${esc((d.stats || {}).catches || 0)} catches</span></span>`;
   },
   render() {
     const b = $('onbody'); if (!b) return;
@@ -2551,7 +2857,7 @@ var Online = {   // var: the save() hooks check for it before this point runs
       } else if (this.tab === 'spiders') {
         const me = spider.genome, canCourt = !world.egg && spider.stage === ADULT;
         h += `<p class="muted">Recently active spiders. Mature adults of the opposite sex can be courted${canCourt ? '' : ' once yours is a mature adult'}.</p>`;
-        h += L ? L.recent.filter(d => d.owner !== this.user.uid).map((d, i) => `<div class="card">${this.spiderLine(d)}${canCourt && d.adult && d.sex !== me.sex ? `<button data-court="${i}">Court</button>` : ''}</div>`).join('') || '<p class="muted">No other players yet. Invite a friend!</p>' : '<p class="muted">Loading…</p>';
+        h += L ? L.recent.filter(d => d.owner !== this.user.uid).map((d, i) => `<div class="card">${this.spiderLine(d)}${canCourt && d.adult && d.sex !== me.sex && ((d.genome || {}).species || 'wolf') === me.species ? `<button data-court="${i}">Court</button>` : ''}</div>`).join('') || '<p class="muted">No other players yet. Invite a friend!</p>' : '<p class="muted">Loading…</p>';
       } else if (this.tab === 'court') {
         const inc = this.incoming.filter(m => m.status === 'pending'), out = this.outgoing.slice(-8).reverse();
         h += `<p class="muted" style="margin-bottom:2px">REQUESTS FOR ${esc(spider.genome.name.toUpperCase())}</p>` + (inc.map(m => `<div class="card"><span class="grow"><b>${esc(m.fromSpider.name)}</b> <span class="muted">from ${esc(m.fromName)}</span></span><button data-acc="${esc(m.id)}">Accept</button><button data-dec="${esc(m.id)}">Decline</button></div>`).join('') || '<p class="muted">None right now.</p>');

@@ -1,0 +1,24 @@
+{
+  "name": "crittergotchi",
+  "private": true,
+  "type": "module",
+  "description": "Mystery-egg critter virtual pet with optional Firebase online play",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node firebase/build.mjs",
+    "build:emulator": "node firebase/build.mjs --emulator",
+    "emulators": "firebase emulators:start --project demo-arachni",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-arachni \"node --test tests/firestore.rules.test.mjs\"",
+    "deploy": "npm run build && firebase deploy --only hosting,firestore"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
+    "firebase": "^13.3.0",
+    "firebase-tools": "^15.37.0"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "^1.14.7"
+  }
+}

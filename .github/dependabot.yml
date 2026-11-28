@@ -1,0 +1,14 @@
+# Weekly update PRs for npm packages (Firebase SDK, CLI, test tools) and the pinned GitHub Actions.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      firebase:
+        patterns: ["firebase", "firebase-tools", "@firebase/*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
