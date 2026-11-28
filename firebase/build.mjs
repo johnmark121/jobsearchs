@@ -4,7 +4,7 @@
 // copy at a few fixed anchor points:
 //   1. inserts your Firebase web config (FIREBASE_CONFIG is `null` in the source = offline mode)
 //   2. points the SDK imports at a self-hosted copy of the Firebase SDK (same version you test with)
-//   3. adds Firebase App Check (reCAPTCHA Enterprise) right after the app is initialised
+//   3. adds Firebase App Check (reCAPTCHA v3 or Enterprise) right after the app is initialised
 //   4. adds a Content-Security-Policy <meta> tag with a SHA-256 hash of the game's inline script
 // If an anchor is missing (the game code changed), the build stops with a clear error instead of
 // silently producing a broken page.
@@ -35,7 +35,9 @@ function loadConfig() {
   if (missing.length) fail('Firebase config is missing: ' + missing.join(', '));
   const extra = Object.keys(cfg.firebase).filter(k => !['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId', 'appId', 'measurementId'].includes(k));
   if (extra.length) fail('unexpected keys in the Firebase web config (never put secrets here): ' + extra.join(', '));
-  if (!cfg.appCheckSiteKey) console.warn('⚠ no appCheckSiteKey: App Check is off. Add a reCAPTCHA Enterprise site key before going public.');
+  if (!cfg.appCheckSiteKey) console.warn('⚠ no appCheckSiteKey: App Check is off. Add a reCAPTCHA site key before going public.');
+  cfg.appCheckProvider = cfg.appCheckProvider || 'recaptcha-enterprise';   // 'recaptcha-v3' = free classic reCAPTCHA v3, no billing account
+  if (!['recaptcha-v3', 'recaptcha-enterprise'].includes(cfg.appCheckProvider)) fail('appCheckProvider must be "recaptcha-v3" or "recaptcha-enterprise"');
   return cfg;
 }
 
@@ -88,7 +90,7 @@ function buildPage(name, cfg, sdk) {
     `const a = app.initializeApp(cfg);
       if (!EMULATOR && APPCHECK_SITE_KEY) {   // [firebase/build.mjs] App Check: only genuine copies of this site can use the backend
         const ac = await import(FB_CDN + 'firebase-app-check.js');
-        ac.initializeAppCheck(a, {provider: new ac.ReCaptchaEnterpriseProvider(APPCHECK_SITE_KEY), isTokenAutoRefreshEnabled: true});
+        ac.initializeAppCheck(a, {provider: new ac.${cfg.appCheckProvider === 'recaptcha-v3' ? 'ReCaptchaV3Provider' : 'ReCaptchaEnterpriseProvider'}(APPCHECK_SITE_KEY), isTokenAutoRefreshEnabled: true});
       }
       const au = auth.getAuth(a), db = fs.getFirestore(a);`, 'App Check');
   // CSP: hash of the (patched) inline script
@@ -104,5 +106,5 @@ const cfg = loadConfig();
 rmSync(OUT, {recursive: true, force: true}); mkdirSync(OUT, {recursive: true});
 const sdk = vendorSdk();
 for (const p of PAGES) buildPage(p, cfg, sdk);
-console.log(`✔ built ${PAGES.join(', ')} -> dist/  (Firebase SDK ${sdk.ver} self-hosted${EMULATOR ? ', EMULATOR mode' : cfg.appCheckSiteKey ? ', App Check on' : ', App Check OFF'})`);
+console.log(`✔ built ${PAGES.join(', ')} -> dist/  (Firebase SDK ${sdk.ver} self-hosted${EMULATOR ? ', EMULATOR mode' : cfg.appCheckSiteKey ? ', App Check on (' + cfg.appCheckProvider + ')' : ', App Check OFF'})`);
 console.log('  files:', readdirSync(OUT).join(', '));

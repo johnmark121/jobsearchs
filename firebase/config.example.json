@@ -7,5 +7,6 @@
     "messagingSenderId": "YOUR_SENDER_ID",
     "appId": "YOUR_APP_ID"
   },
-  "appCheckSiteKey": "YOUR_RECAPTCHA_ENTERPRISE_SITE_KEY"
+  "appCheckProvider": "recaptcha-v3",
+  "appCheckSiteKey": "YOUR_RECAPTCHA_SITE_KEY"
 }

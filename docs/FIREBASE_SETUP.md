@@ -37,6 +37,8 @@ Requirements: Node.js 22+, Java 21+ (for the emulators), a Google account.
 
 ## 2. App Check (blocks bots and copies of your site)
 
+> **Free option:** set `"appCheckProvider": "recaptcha-v3"` in `firebase/config.json` and create a classic **reCAPTCHA v3** key at google.com/recaptcha/admin (no billing account). The steps below are for reCAPTCHA Enterprise.
+
 1. Google Cloud Console → **Security → reCAPTCHA** → **Create key**: type *Website*, add your domains (`<project>.web.app`, `<project>.firebaseapp.com`, your custom domain). Copy the **site key**.
 2. Firebase console → **Build → App Check → Apps** → your web app → **reCAPTCHA Enterprise** → paste the site key → Save.
 3. Put the same site key in `firebase/config.json` (`appCheckSiteKey`).
