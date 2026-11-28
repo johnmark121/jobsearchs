@@ -68,12 +68,17 @@ test('spiders: an egg summary (no bornAt, stage -1) is allowed', async () => {
   const s = summary(ALICE, 'Alice', {stage: -1, adult: false}); delete s.bornAt;
   await assertSucceeds(setDoc(doc(db(ALICE), 'spiders', ALICE), s));
 });
+test('spiders: every hatchable species (including new spiders) is accepted', async () => {
+  for (const sp of ['wolf', 'huntsman', 'orb', 'jumper', 'widow', 'tarantula', 'scorpion', 'beetle'])
+    await assertSucceeds(setDoc(doc(db(ALICE), 'spiders', ALICE), summary(ALICE, 'Alice', {genome: genome('Karo', 'female', sp)})));
+});
 test('spiders: cannot impersonate, fake names or write invalid data', async () => {
   await assertFails(setDoc(doc(db(BOB), 'spiders', ALICE), summary(ALICE, 'Alice')));
   await assertFails(setDoc(doc(db(ALICE), 'spiders', ALICE), summary(ALICE, 'NotAlice')));
   await assertFails(setDoc(doc(db(ALICE), 'spiders', ALICE), summary(ALICE, 'Alice', {stats: {meals: 1, hunts: 5, catches: 9}})));
   await assertFails(setDoc(doc(db(ALICE), 'spiders', ALICE), summary(ALICE, 'Alice', {stage: 99})));
-  await assertFails(setDoc(doc(db(ALICE), 'spiders', ALICE), summary(ALICE, 'Alice', {genome: {...genome('Karo', 'female'), species: 'dragon'}})));
+  await assertFails(setDoc(doc(db(ALICE), 'spiders', ALICE), summary(ALICE, 'Alice', {genome: {...genome('Karo', 'female'), species: '<img onerror=x>'}})));
+  await assertFails(setDoc(doc(db(ALICE), 'spiders', ALICE), summary(ALICE, 'Alice', {genome: {...genome('Karo', 'female'), species: 'x'.repeat(40)}})));
   await assertFails(setDoc(doc(db(ALICE), 'spiders', ALICE), summary(ALICE, 'Alice', {bornAt: Date.now() + 86400e3})));
   await assertFails(setDoc(doc(db(ALICE), 'spiders', ALICE), summary(ALICE, 'Alice', {isAdmin: true})));
 });

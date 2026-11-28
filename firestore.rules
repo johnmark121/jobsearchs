@@ -19,7 +19,7 @@ service cloud.firestore {
     function genomeOk(g) {
       return g is map && g.size() <= 24
         && str(g.name, 1, 24) && g.sex in ['female', 'male'] && str(g.morph, 1, 24)
-        && g.get('species', 'wolf') in ['wolf', 'jumper', 'beetle', 'ant', 'mantis', 'scorpion'];
+        && g.get('species', 'wolf') is string && g.get('species', 'wolf').matches('^[a-z]{2,16}$');   // any species id, so new ones need no rules change
     }
     function spiderRefOk(s) { return s is map && s.keys().hasOnly(['name', 'genome']) && str(s.name, 1, 24) && genomeOk(s.genome); }
     function statsOk(s) {
