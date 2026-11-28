@@ -1,38 +1,89 @@
 rules_version = '2';
-// Firestore security rules for ArachniGotchi online play.
-// Paste into Firebase console -> Firestore Database -> Rules, then Publish.
+// Firestore security rules for CritterGotchi online play.
+// Principles: deny by default, every write must come from the signed-in owner, and every document is
+// validated for exact keys, types and sizes. Anything not matched below is denied.
+// Test locally: `npm run test:rules` (runs tests/firestore.rules.test.mjs in the Firestore emulator).
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ---------- helpers
     function signedIn() { return request.auth != null; }
     function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function incoming() { return request.resource.data; }
+    function str(v, min, max) { return v is string && v.size() >= min && v.size() <= max; }
+    function intIn(v, lo, hi) { return v is int && v >= lo && v <= hi; }
+    function profile(uid) { return get(/databases/$(database)/documents/users/$(uid)).data; }
+    function hasProfile(uid) { return exists(/databases/$(database)/documents/users/$(uid)); }
 
-    // player profile: public name, only the owner can write it
+    // a genome is a small map of numbers + a few short strings (written by the game, shared with other players)
+    function genomeOk(g) {
+      return g is map && g.size() <= 24
+        && str(g.name, 1, 24) && g.sex in ['female', 'male'] && str(g.morph, 1, 24)
+        && g.get('species', 'wolf') in ['wolf', 'jumper', 'beetle', 'ant', 'mantis', 'scorpion'];
+    }
+    function spiderRefOk(s) { return s is map && s.keys().hasOnly(['name', 'genome']) && str(s.name, 1, 24) && genomeOk(s.genome); }
+    function statsOk(s) {
+      return s is map && s.keys().hasOnly(['meals', 'hunts', 'catches'])
+        && intIn(s.meals, 0, 1000000) && intIn(s.hunts, 0, 1000000) && intIn(s.catches, 0, 1000000)
+        && s.catches <= s.hunts;
+    }
+
+    // ---------- player profile: only the owner can read or write it (others see the name copied onto spiders)
     match /users/{uid} {
-      allow read: if true;
-      allow write: if isOwner(uid) && request.resource.data.name is string
-                   && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 20;
-    }
-    // full private save (JSON string): only the owner
-    match /saves/{uid} {
       allow read: if isOwner(uid);
-      allow write: if isOwner(uid) && request.resource.data.json is string && request.resource.data.json.size() < 500000;
+      allow create: if isOwner(uid) && incoming().keys().hasOnly(['name', 'created'])
+                    && str(incoming().name, 2, 20) && incoming().created == request.time;
+      allow update, delete: if false;   // names are permanent (spider summaries and courtships copy them)
     }
-    // public spider summary for leaderboards and the gallery
+
+    // ---------- full private save (one JSON string): only the owner, capped well below Firestore's 1 MiB limit
+    match /saves/{uid} {
+      allow read, delete: if isOwner(uid);
+      allow create, update: if isOwner(uid) && incoming().keys().hasOnly(['json', 'at'])
+                            && str(incoming().json, 2, 500000) && incoming().at == request.time;
+    }
+
+    // ---------- public critter summary for leaderboards and the gallery (signed-in players only)
     match /spiders/{uid} {
-      allow read: if true;
-      allow write: if isOwner(uid) && request.resource.data.owner == uid;
+      allow read: if signedIn();
+      allow delete: if isOwner(uid);
+      allow create, update: if isOwner(uid) && hasProfile(uid)
+        && incoming().keys().hasOnly(['owner', 'ownerName', 'name', 'sex', 'morph', 'gen', 'parents', 'stage', 'adult', 'genome', 'stats', 'updated', 'bornAt'])
+        && incoming().owner == uid && incoming().ownerName == profile(uid).name
+        && str(incoming().name, 1, 24) && incoming().sex in ['female', 'male'] && str(incoming().morph, 1, 24)
+        && intIn(incoming().gen, 1, 10000) && intIn(incoming().stage, -1, 6) && incoming().adult is bool
+        && (incoming().parents == null || (incoming().parents is list && incoming().parents.size() == 2))
+        && genomeOk(incoming().genome) && statsOk(incoming().stats)
+        && incoming().updated == request.time
+        && (!('bornAt' in incoming()) || (incoming().bornAt is number && incoming().bornAt <= request.time.toMillis() + 300000))
+        // anti-cheat (best effort, the game runs on the client): the same critter can't jump more than 20 catches per save
+        && (request.method == 'create' || incoming().name != resource.data.name
+            || incoming().stats.catches <= resource.data.stats.catches + 20);
     }
-    // courtship requests between two players
+
+    // ---------- courtship requests between two players
     match /matings/{id} {
-      allow read: if signedIn() && (resource.data.from == request.auth.uid || resource.data.to == request.auth.uid);
-      allow create: if signedIn() && request.resource.data.from == request.auth.uid
-                    && request.resource.data.to != request.auth.uid && request.resource.data.status == 'pending';
-      allow update: if signedIn()
-                    && (resource.data.from == request.auth.uid || resource.data.to == request.auth.uid)
-                    && request.resource.data.from == resource.data.from && request.resource.data.to == resource.data.to
-                    && request.resource.data.fromSpider == resource.data.fromSpider
-                    // only the recipient may change the status (accept / decline)
-                    && (request.resource.data.status == resource.data.status || request.auth.uid == resource.data.to);
+      function party() { return signedIn() && (resource.data.from == request.auth.uid || resource.data.to == request.auth.uid); }
+      function changed() { return incoming().diff(resource.data).affectedKeys(); }
+
+      allow read: if party();
+      allow create: if signedIn()
+        && incoming().keys().hasOnly(['from', 'to', 'fromName', 'toName', 'fromSpider', 'toSpider', 'status', 'claimed', 'created'])
+        && incoming().from == request.auth.uid && str(incoming().to, 1, 128) && incoming().to != request.auth.uid
+        && hasProfile(incoming().to) && incoming().fromName == profile(request.auth.uid).name && str(incoming().toName, 2, 20)
+        && spiderRefOk(incoming().fromSpider) && spiderRefOk(incoming().toSpider)
+        && incoming().status == 'pending' && incoming().claimed == {} && incoming().created == request.time;
+      allow update: if party() && (
+        // the recipient answers a pending request once (and may attach their own critter when accepting)
+        (resource.data.status == 'pending' && request.auth.uid == resource.data.to
+          && changed().hasOnly(['status', 'toSpider']) && incoming().status in ['accepted', 'declined']
+          && spiderRefOk(incoming().toSpider))
+        // after acceptance, each partner marks only their OWN egg as claimed
+        || (resource.data.status == 'accepted' && changed().hasOnly(['claimed'])
+          && incoming().claimed.diff(resource.data.claimed).affectedKeys().hasOnly([request.auth.uid])
+          && incoming().claimed[request.auth.uid] == true)
+      );
+      allow delete: if false;
     }
   }
 }
